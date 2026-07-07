@@ -120,12 +120,24 @@ if (-not $SkipPush) {
         git remote add origin $RepoUrl
     }
     Write-Host "==> Push to GitHub ($Branch) tag $tag ..." -ForegroundColor Cyan
-    git pull --rebase origin $Branch 2>$null | Out-Null
+    # git 常把进度写到 stderr；在 Stop 模式下会误触发 RemoteException
+    $prevErr = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    git pull --rebase origin $Branch 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "    (rebase skipped, try push)" -ForegroundColor Yellow
+        Write-Host "    (rebase pull skipped or failed, continuing with push)" -ForegroundColor Yellow
     }
-    git push -u origin $Branch
-    git push origin $tag
+    git push -u origin $Branch 2>&1 | ForEach-Object { Write-Host "    $_" }
+    if ($LASTEXITCODE -ne 0) {
+        $ErrorActionPreference = $prevErr
+        throw "git push origin $Branch failed (exit $LASTEXITCODE)"
+    }
+    git push origin $tag 2>&1 | ForEach-Object { Write-Host "    $_" }
+    if ($LASTEXITCODE -ne 0) {
+        $ErrorActionPreference = $prevErr
+        throw "git push origin $tag failed (exit $LASTEXITCODE)"
+    }
+    $ErrorActionPreference = $prevErr
 }
 
 if (-not $SkipDeploy) {
