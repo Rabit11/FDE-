@@ -1,0 +1,30 @@
+前端（框架/UI/工具）
+
+React — 一个流行的 UI 库，用于构建组件化前端。https://github.com/facebook/react
+Vue — 渐进式前端框架，易上手、生态丰富。https://github.com/vuejs/vue
+Svelte — 编译时框架，生成原生JS。https://github.com/sveltejs/svelte
+Vite — 极速前端部署与开发工具。https://github.com/vitejs/vite
+Tailwind CSS — 原子化 CSS 工具类库，涵盖快速布局与样式。https://github.com/tailwindlabs/tailwindcss
+Ant Design — 企业级 React UI 组件库（中后台常用）。https://github.com/ant-design/ant-design
+MUI (Material UI) — React 的 Material Design 组件实现。https://github.com/mui/material-ui
+React Router — React 路由解决方案。https://github.com/remix-run/react-router
+TanStack Query (React Query) — 服务端状态与数据请求管理。https://github.com/TanStack/query
+Zustand — 轻量的 React 状态管理库。https://github.com/pmndrs/zustand
+内部（框架/ORM/API）
+
+Express — Node.js 最广泛使用的 Web 框架之一。https://github.com/expressjs/express
+Fastify — 高性能的 Node.js 框架，关注速度与低开销。https://github.com/fastify/fastify
+NestJS — 基于 TypeScript 的服务端框架（定制、定价）。https://github.com/nestjs/nest
+Spring Boot — Java 企业级开发的事实标准框架。https://github.com/spring-projects/spring-boot
+Django — Python 的全栈框架，带 ORM、admin 等。https://github.com/django/django
+Gin — Go 语言的高性能 Web 框架。https://github.com/gin-gonic/gin
+Prisma — 现代化 TypeScript ORM，支持迁移与类型安全。https://github.com/prisma/prisma
+TypeORM — TypeScript/Node 的 ORM 选项，其中之一关注实体映射。https://github.com/typeorm/typeorm
+SQLAlchemy — Python 的强大 ORM（适合复杂的 SQL 场景）。https://github.com/sqlalchemy/sqlalchemy
+Apollo Server — GraphQL 服务端实现，生态丰富。https://github.com/apollographql/apollo-server
+测试 / E2E / 集装箱（补充）
+
+Jest — JavaScript 单元测试框架。https://github.com/facebook/jest
+Playwright — 现代浏览器端E2E测试工具。https://github.com/microsoft/playwright
+Cypress — 前端E2E测试工具，易上手。https://github.com/cypress-io/cypress
+Docker — 容器化标准工具，方便本地/生产环境一致性。https://github.com/docker
