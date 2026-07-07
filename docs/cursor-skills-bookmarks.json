@@ -1,0 +1,88 @@
+{
+  "title": "Cursor Skills 书签收藏",
+  "updated": "2026-07-07",
+  "project_stack": ["Vue3", "Express", "Prisma", "PostgreSQL", "Docker", "ECharts"],
+  "repositories": [
+    {
+      "name": "awesome-cursor-skills",
+      "url": "https://github.com/spencerpauly/awesome-cursor-skills",
+      "type": "index",
+      "tags": ["frontend", "backend", "devops", "testing"]
+    },
+    {
+      "name": "aussiegingersnap/cursor-skills",
+      "url": "https://github.com/aussiegingersnap/cursor-skills",
+      "type": "skills-collection",
+      "tags": ["frontend", "backend", "database", "infra"]
+    },
+    {
+      "name": "anthropics/skills",
+      "url": "https://github.com/anthropics/skills",
+      "type": "official",
+      "tags": ["frontend", "testing", "documents"]
+    },
+    {
+      "name": "vercel-labs/agent-skills",
+      "url": "https://github.com/vercel-labs/agent-skills",
+      "type": "official",
+      "tags": ["react", "frontend", "performance"]
+    },
+    {
+      "name": "PatrickJS/awesome-cursorrules",
+      "url": "https://github.com/PatrickJS/awesome-cursorrules",
+      "type": "rules-mdc",
+      "tags": ["frontend", "backend", "vue", "node"]
+    },
+    {
+      "name": "getsentry/skills",
+      "url": "https://github.com/getsentry/skills",
+      "type": "skills-collection",
+      "tags": ["review", "security", "django"]
+    }
+  ],
+  "directories": [
+    { "name": "Cursor Skills Docs", "url": "https://docs.cursor.com/agent/skills" },
+    { "name": "Agent Skills Spec", "url": "https://agentskills.io" },
+    { "name": "skills.sh", "url": "https://skills.sh" },
+    { "name": "AgentDepot", "url": "https://agentdepot.dev" },
+    { "name": "Cursor Directory", "url": "https://cursor.directory" },
+    { "name": "GitHub Topic cursor-skills", "url": "https://github.com/topics/cursor-skills" }
+  ],
+  "frontend_skills": [
+    { "id": "ui-design-system", "repo": "aussiegingersnap/cursor-skills", "path": "skills/ui-design-system" },
+    { "id": "ui-principles", "repo": "aussiegingersnap/cursor-skills", "path": "skills/ui-principles" },
+    { "id": "using-ui-stack", "repo": "spencerpauly/awesome-cursor-skills", "path": "resources/using-ui-stack" },
+    { "id": "anthropic-frontend-design", "repo": "anthropics/skills", "path": "skills/frontend-design" },
+    { "id": "vercel-web-design-guidelines", "repo": "vercel-labs/agent-skills", "path": "skills/web-design-guidelines" },
+    { "id": "visual-qa-testing", "repo": "spencerpauly/awesome-cursor-skills", "path": "resources/visual-qa-testing" },
+    { "id": "accessibility-auditing", "repo": "spencerpauly/awesome-cursor-skills", "path": "resources/accessibility-auditing" },
+    { "id": "responsive-testing", "repo": "spencerpauly/awesome-cursor-skills", "path": "resources/responsive-testing" },
+    { "id": "state-tanstack", "repo": "aussiegingersnap/cursor-skills", "path": "skills/state-tanstack" }
+  ],
+  "backend_skills": [
+    { "id": "api-rest", "repo": "aussiegingersnap/cursor-skills", "path": "skills/api-rest" },
+    { "id": "feature-build", "repo": "aussiegingersnap/cursor-skills", "path": "skills/feature-build" },
+    { "id": "auth-better-auth", "repo": "aussiegingersnap/cursor-skills", "path": "skills/auth-better-auth" },
+    { "id": "adding-api-docs", "repo": "spencerpauly/awesome-cursor-skills", "path": "resources/adding-api-docs" },
+    { "id": "api-smoke-testing", "repo": "spencerpauly/awesome-cursor-skills", "path": "resources/api-smoke-testing" },
+    { "id": "adding-docker", "repo": "spencerpauly/awesome-cursor-skills", "path": "resources/adding-docker" },
+    { "id": "infra-docker", "repo": "aussiegingersnap/cursor-skills", "path": "skills/infra-docker" },
+    { "id": "setting-up-ci", "repo": "spencerpauly/awesome-cursor-skills", "path": "resources/setting-up-ci" },
+    { "id": "auditing-security", "repo": "spencerpauly/awesome-cursor-skills", "path": "resources/auditing-security" }
+  ],
+  "database_skills": [
+    { "id": "db-postgres", "repo": "aussiegingersnap/cursor-skills", "path": "skills/db-postgres", "recommended": true },
+    { "id": "db-sqlite", "repo": "aussiegingersnap/cursor-skills", "path": "skills/db-sqlite" },
+    { "id": "database-design", "repo": "spencerpauly/awesome-cursor-skills", "path": "resources/database-design", "recommended": true }
+  ],
+  "recommended_for_this_project": [
+    "db-postgres",
+    "database-design",
+    "api-rest",
+    "infra-docker",
+    "ui-design-system",
+    "visual-qa-testing",
+    "feature-build",
+    "reviewing-code"
+  ]
+}
