@@ -1,0 +1,60 @@
+# AgileAI · AI赋能敏捷项目管理平台
+
+面向 AI 赋能项目的现代化敏捷管理平台，替代传统 FDE 审批式工单流程，实现 **Sprint 节奏 + 流动看板 + AI 协作者** 的持续价值交付。
+
+## 核心特性
+
+| 模块 | 能力 |
+|------|------|
+| **流动看板** | Kanban 六列流转，WIP 上限告警，拖拽变更状态 |
+| **Sprint 管理** | 2 周迭代节奏，燃尽进度，Sprint Backlog |
+| **智能 Backlog** | Epic / Story / Task / Bug 层级，优先级排序 |
+| **在线验收中心** | 平台内验收，打回反馈自动创建新 Story |
+| **AI 需求拆分** | 自然语言需求 → Epic + Story + Task + 验收标准 |
+| **AI 站会摘要** | 基于任务状态自动生成每日站会报告 |
+| **AI 风险预警** | 阻塞检测、延期预测、Sprint 健康度分析 |
+| **度量仪表盘** | Lead Time、吞吐量、状态分布、活动流 |
+
+## 快速启动
+
+```bash
+npm install
+npm start
+```
+
+访问 **http://localhost:3456**
+
+## 技术栈
+
+- **后端**: Node.js + Express + SQLite (better-sqlite3)
+- **前端**: 原生 HTML/CSS/JS SPA
+- **AI**: 内置智能引擎（需求拆分、风险分析、站会摘要、Retro 报告）
+
+## API 概览
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/items` | 获取工作项列表 |
+| POST | `/api/items` | 创建工作项 |
+| PATCH | `/api/items/:id` | 更新工作项 |
+| POST | `/api/items/:id/accept` | 在线验收 |
+| GET | `/api/sprints` | 获取 Sprint 列表 |
+| GET | `/api/metrics` | 获取度量数据 |
+| POST | `/api/ai/split-requirement` | AI 需求拆分 |
+| POST | `/api/ai/standup` | AI 站会摘要 |
+| POST | `/api/ai/risks` | AI 风险扫描 |
+| POST | `/api/ai/retro` | AI Sprint 回顾 |
+
+## 与 FDE 旧流程对比
+
+| FDE 旧流程 | AgileAI 新方案 |
+|-----------|---------------|
+| 多级审批表单 | 看板拖拽 + WIP 限制 |
+| 确认需求卡（需求冻结） | Sprint 内持续调整 Backlog |
+| 8-10 条手动日志 | 状态流转自动记录 + 活动流 |
+| 线下需求方审核 | 在线验收中心，反馈自动回流 |
+| 无 AI 能力 | AI 拆分/摘要/预警/Retro 四大能力 |
+
+## License
+
+MIT
