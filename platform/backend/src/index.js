@@ -358,6 +358,29 @@ function buildProjectWhere(user, extra = {}) {
   return parts.length === 1 ? parts[0] : { AND: parts };
 }
 
+function todoRoleAllowed(todoRoles, userRole) {
+  const allowed = String(todoRoles || '')
+    .split(',')
+    .map((role) => normalizeRole(role.trim()))
+    .filter(Boolean);
+  return allowed.includes(normalizeRole(userRole));
+}
+
+function todoOrgAllowed(todo, user) {
+  if (!todo.orgs) return true;
+  const role = normalizeRole(user.role);
+  if (['mgmt_unit', 'finance'].includes(role)) {
+    return Boolean(user.org && todo.orgs.includes(user.org));
+  }
+  if (role === 'project_team') {
+    return Boolean(
+      (user.org && todo.orgs.includes(user.org)) ||
+      (todo.project?.org && todo.project.org === user.org),
+    );
+  }
+  return true;
+}
+
 app.get('/api/projects', authMiddleware, async (req, res) => {
   const { level, channel, risk, phase, search } = req.query;
   const filters = {};
@@ -458,10 +481,8 @@ app.get('/api/dashboard', authMiddleware, async (req, res) => {
     take: 10,
   });
   const filteredTodos = todos.filter((t) => {
-    const roles = t.roles.split(',');
-    if (!roles.includes(req.user.role)) return false;
-    if (t.orgs && req.user.role === 'dept' && !t.orgs.includes(req.user.org)) return false;
-    return true;
+    if (!todoRoleAllowed(t.roles, req.user.role)) return false;
+    return todoOrgAllowed(t, req.user);
   });
 
   let charts = null;
@@ -483,13 +504,8 @@ app.get('/api/todos', authMiddleware, async (req, res) => {
     orderBy: { createdAt: 'desc' },
   });
   const filtered = todos.filter((t) => {
-    const roles = t.roles.split(',');
-    if (!roles.includes(req.user.role)) return false;
-    if (t.orgs && ['dept', 'owner', 'member'].includes(req.user.role)) {
-      if (req.user.role === 'dept' && t.orgs && !t.orgs.includes(req.user.org)) return false;
-      if (['owner', 'member'].includes(req.user.role) && t.project && t.project.org !== req.user.org) return false;
-    }
-    return true;
+    if (!todoRoleAllowed(t.roles, req.user.role)) return false;
+    return todoOrgAllowed(t, req.user);
   });
   res.json(filtered);
 });

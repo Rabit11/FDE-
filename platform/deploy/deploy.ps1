@@ -31,8 +31,8 @@ docker compose build
 docker compose up -d
 docker compose ps
 echo ''
-echo '部署完成: http://${TargetHost}'
+echo '部署完成: http://${TargetHost}:8084'
 "@
 ssh "${TargetUser}@${TargetHost}" $remoteScript
 
-Write-Host "==> 完成! 访问 http://${TargetHost}" -ForegroundColor Green
+Write-Host "==> 完成! 访问 http://${TargetHost}:8084" -ForegroundColor Green

@@ -36,5 +36,5 @@ docker compose build --no-cache
 docker compose up -d
 docker compose ps
 echo ""
-echo "部署完成，访问: http://${TARGET_HOST}"
+echo "部署完成，访问: http://${TARGET_HOST}:8084"
 EOF

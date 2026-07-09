@@ -156,11 +156,11 @@ export async function seedDatabase() {
     for (const d of deliverables) await prisma.deliverable.create({ data: d });
 
     const todos = [
-      { title: '审批：宽体客机复合材料立项变更', type: 'approval', projectId: 'p01', roles: 'dept,pm,hq', orgs: '试飞中心', status: 'pending' },
-      { title: '协作单位评价：供应链数字化平台', type: 'partner_eval', projectId: 'p14', roles: 'dept,pm', orgs: '总部科技部', status: 'pending' },
-      { title: '验收材料审核：航电系统集成验证', type: 'acceptance', projectId: 'p08', roles: 'pm,hq', status: 'pending' },
-      { title: '后评价启动：飞控系统综合验证平台', type: 'post_eval', projectId: 'p05', roles: 'hq,leader', status: 'pending' },
-      { title: '里程碑佐证上传：噪声控制研究', type: 'milestone', projectId: 'p06', roles: 'owner,member', orgs: '北研中心', status: 'pending' },
+      { title: '审批：宽体客机复合材料立项变更', type: 'approval', projectId: 'p01', roles: 'mgmt_unit,project_team,mgmt_hq', orgs: '试飞中心', status: 'pending' },
+      { title: '协作单位评价：供应链数字化平台', type: 'partner_eval', projectId: 'p14', roles: 'mgmt_unit,project_team', orgs: '总部科技部', status: 'pending' },
+      { title: '验收材料审核：航电系统集成验证', type: 'acceptance', projectId: 'p08', roles: 'project_team,mgmt_hq', status: 'pending' },
+      { title: '后评价启动：飞控系统综合验证平台', type: 'post_eval', projectId: 'p05', roles: 'mgmt_hq', status: 'pending' },
+      { title: '里程碑佐证上传：噪声控制研究', type: 'milestone', projectId: 'p06', roles: 'project_team', orgs: '北研中心', status: 'pending' },
     ];
     for (const t of todos) await prisma.todo.create({ data: t });
   } else {

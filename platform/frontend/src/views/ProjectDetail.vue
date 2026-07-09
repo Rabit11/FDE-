@@ -16,8 +16,6 @@ async function loadProject() {
 
 onMounted(loadProject);
 
-const phaseSteps = ['立项', '实施', '验收', '协作评价', '成果转化', '后评价'];
-
 const riskLabel = { red: '红', yellow: '黄', blue: '蓝', green: '绿' };
 
 async function setFlowStep(step) {
@@ -72,13 +70,6 @@ async function setFlowStep(step) {
       </div>
       <ChannelFlowTimeline :nodes="project.channelFlow.nodes" />
     </section>
-
-    <el-card shadow="never" class="phase-card">
-      <template #header>生命周期阶段 <small class="muted">（平台统一六阶段）</small></template>
-      <el-steps :active="Math.max(0, phaseSteps.indexOf(project.phase))" finish-status="success" align-center>
-        <el-step v-for="s in phaseSteps" :key="s" :title="s" />
-      </el-steps>
-    </el-card>
 
     <el-card shadow="never" style="margin-bottom:16px">
       <template #header>项目所属信息 <small class="muted">（V18 台账表头）</small></template>
@@ -234,5 +225,4 @@ async function setFlowStep(step) {
 .flow-section__head h3 { margin: 0 0 4px; font-size: 14px; color: #f1f5f9; }
 .flow-section__head p { margin: 0; font-size: 12px; }
 .flow-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.phase-card { margin-bottom: 16px; }
 </style>
