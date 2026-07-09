@@ -39,14 +39,14 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27
     break
   fi
   if [ "`$i" = "30" ]; then
-    echo '健康检查失败，输出 backend 日志：'
+    echo "health check failed; backend logs:"
     docker compose logs --tail=120 backend
     exit 1
   fi
   sleep 2
 done
 echo ''
-echo '部署完成: http://${TargetHost}:${Port}'
+echo "deployed: http://${TargetHost}:${Port}"
 "@
 
 $remoteScriptPath = Join-Path $env:TEMP "keyan-platform-remote-deploy.sh"
