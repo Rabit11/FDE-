@@ -24,9 +24,11 @@ npm start
 
 访问 **http://localhost:3456**
 
+GitHub: **https://github.com/Rabit11/ai-agile-platform**
+
 ## 技术栈
 
-- **后端**: Node.js + Express + SQLite (better-sqlite3)
+- **后端**: Node.js + Express + JSON 持久化存储
 - **前端**: 原生 HTML/CSS/JS SPA
 - **AI**: 内置智能引擎（需求拆分、风险分析、站会摘要、Retro 报告）
 
