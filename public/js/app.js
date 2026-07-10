@@ -174,7 +174,12 @@ function renderBacklog() {
 
 function renderSprint() {
   const sprint = state.activeSprint;
-  if (!sprint) return '<div class="empty-state">无活跃 Sprint，请先创建</div>';
+  if (!sprint) {
+    return `<div class="empty-state">
+      <p>无活跃 Sprint</p>
+      <button class="btn btn-primary" style="margin-top:1rem" onclick="showNewSprintModal()">+ 创建 Sprint</button>
+    </div>`;
+  }
   const items = state.items.filter(i => i.sprint_id === sprint.id);
   const totalPts = items.reduce((s, i) => s + (i.story_points || 0), 0);
   const donePts = items.filter(i => i.status === 'done').reduce((s, i) => s + (i.story_points || 0), 0);
@@ -182,9 +187,17 @@ function renderSprint() {
 
   return `
     <div class="card" style="margin-bottom:1rem">
-      <h2 style="margin-bottom:0.5rem">${esc(sprint.name)}</h2>
-      <p style="color:var(--muted);margin-bottom:0.75rem">🎯 ${esc(sprint.goal || '无目标')}</p>
-      <div style="display:flex;gap:2rem;font-size:0.88rem">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0.75rem">
+        <div>
+          <h2 style="margin-bottom:0.5rem">${esc(sprint.name)}</h2>
+          <p style="color:var(--muted);margin-bottom:0.75rem">🎯 ${esc(sprint.goal || '无目标')}</p>
+        </div>
+        <div style="display:flex;gap:0.5rem">
+          <button class="btn btn-ghost btn-sm" onclick="showNewSprintModal()">+ 新 Sprint</button>
+          <button class="btn btn-ghost btn-sm" onclick="closeSprint('${sprint.id}')">结束 Sprint</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:2rem;font-size:0.88rem;flex-wrap:wrap">
         <span>📅 ${sprint.start_date} ~ ${sprint.end_date}</span>
         <span>⏳ 剩余 ${daysLeft} 天</span>
         <span>📊 ${donePts}/${totalPts} SP (${totalPts ? Math.round(donePts/totalPts*100) : 0}%)</span>
@@ -204,9 +217,9 @@ function renderSprint() {
             <div class="desc">${STATUS_LABELS[i.status]} · ${i.story_points || 0} SP</div>
           </div>
         </div>
-      `).join('')}
+      `).join('') || '<div class="empty-state">Sprint Backlog 为空</div>'}
     </div>
-    <div style="margin-top:1rem">
+    <div style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
       <button class="btn btn-ghost" onclick="runRetro()">📊 生成 Sprint Retro 报告</button>
     </div>`;
 }
@@ -288,11 +301,62 @@ async function moveItem(id, newStatus) {
 
 function initDragDrop() {
   let draggedId = null;
+  let touchDragging = false;
+  let touchCard = null;
+  let touchClone = null;
+
   document.querySelectorAll('.task-card').forEach(card => {
     card.addEventListener('dragstart', e => { draggedId = card.dataset.id; card.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
     card.addEventListener('dragend', () => { card.classList.remove('dragging'); draggedId = null; });
-    card.addEventListener('click', () => showItemDetail(card.dataset.id));
+    card.addEventListener('click', e => { if (!touchDragging) showItemDetail(card.dataset.id); });
+
+    card.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) return;
+      touchDragging = false;
+      touchCard = card;
+      draggedId = card.dataset.id;
+      card.classList.add('dragging');
+    }, { passive: true });
+
+    card.addEventListener('touchmove', e => {
+      if (!touchCard || e.touches.length !== 1) return;
+      touchDragging = true;
+      e.preventDefault();
+      const touch = e.touches[0];
+      if (!touchClone) {
+        touchClone = card.cloneNode(true);
+        touchClone.style.cssText = 'position:fixed;z-index:9999;opacity:0.85;pointer-events:none;width:' + card.offsetWidth + 'px';
+        document.body.appendChild(touchClone);
+      }
+      touchClone.style.left = (touch.clientX - card.offsetWidth / 2) + 'px';
+      touchClone.style.top = (touch.clientY - 20) + 'px';
+      document.querySelectorAll('.kanban-col').forEach(col => {
+        const rect = col.getBoundingClientRect();
+        col.classList.toggle('drag-over', touch.clientX >= rect.left && touch.clientX <= rect.right && touch.clientY >= rect.top && touch.clientY <= rect.bottom);
+      });
+    }, { passive: false });
+
+    card.addEventListener('touchend', async e => {
+      if (!touchCard) return;
+      const touch = e.changedTouches[0];
+      let targetStatus = null;
+      document.querySelectorAll('.kanban-col').forEach(col => {
+        const rect = col.getBoundingClientRect();
+        if (touch.clientX >= rect.left && touch.clientX <= rect.right && touch.clientY >= rect.top && touch.clientY <= rect.bottom) {
+          targetStatus = col.querySelector('.kanban-cards')?.dataset.status;
+        }
+        col.classList.remove('drag-over');
+      });
+      touchCard.classList.remove('dragging');
+      if (touchClone) { touchClone.remove(); touchClone = null; }
+      const id = draggedId;
+      touchCard = null;
+      draggedId = null;
+      if (touchDragging && targetStatus && id) await moveItem(id, targetStatus);
+      setTimeout(() => { touchDragging = false; }, 100);
+    });
   });
+
   document.querySelectorAll('.kanban-cards').forEach(zone => {
     zone.addEventListener('dragover', e => { e.preventDefault(); zone.parentElement.classList.add('drag-over'); });
     zone.addEventListener('dragleave', () => zone.parentElement.classList.remove('drag-over'));
@@ -302,6 +366,40 @@ function initDragDrop() {
       if (draggedId) await moveItem(draggedId, zone.dataset.status);
     });
   });
+}
+
+function showNewSprintModal() {
+  const start = new Date().toISOString().slice(0, 10);
+  const end = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+  const num = state.sprints.length + 1;
+  showModal('创建 Sprint', `
+    <div class="form-group"><label>Sprint 名称</label><input id="sName" value="Sprint ${num}"></div>
+    <div class="form-group"><label>Sprint 目标</label><textarea id="sGoal" placeholder="本迭代要达成的目标..."></textarea></div>
+    <div class="form-group"><label>开始日期</label><input id="sStart" type="date" value="${start}"></div>
+    <div class="form-group"><label>结束日期</label><input id="sEnd" type="date" value="${end}"></div>
+    <button class="btn btn-primary" style="width:100%" onclick="createSprint()">创建并激活</button>
+  `);
+}
+
+async function createSprint() {
+  const data = {
+    name: document.getElementById('sName').value,
+    goal: document.getElementById('sGoal').value,
+    start_date: document.getElementById('sStart').value,
+    end_date: document.getElementById('sEnd').value,
+    status: 'active',
+  };
+  if (!data.name.trim() || !data.start_date || !data.end_date) return toast('请填写完整信息', 'error');
+  await api('/sprints', { method: 'POST', body: data });
+  closeModal();
+  toast('Sprint 已创建');
+  await navigate('sprint');
+}
+
+async function closeSprint(id) {
+  await api(`/sprints/${id}`, { method: 'PATCH', body: { status: 'completed' } });
+  toast('Sprint 已结束');
+  await navigate('sprint');
 }
 
 function showNewItemModal() {
@@ -432,5 +530,6 @@ document.getElementById('btnStandup').addEventListener('click', runStandup);
 document.getElementById('btnRisks').addEventListener('click', runRisks);
 document.getElementById('modalClose').addEventListener('click', closeModal);
 document.getElementById('modalOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+document.getElementById('activeSprintBadge').addEventListener('click', () => navigate('sprint'));
 
 navigate('dashboard');

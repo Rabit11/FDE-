@@ -81,7 +81,20 @@ const queries = {
       start_date: data.start_date, end_date: data.end_date,
       status: data.status || 'planning', created_at: new Date().toISOString(),
     };
+    if (sprint.status === 'active') {
+      _data.sprints.forEach(s => { if (s.status === 'active') s.status = 'completed'; });
+    }
     _data.sprints.push(sprint);
+    queries._persist();
+    return sprint;
+  },
+  updateSprint(id, data) {
+    const sprint = _data.sprints.find(s => s.id === id);
+    if (!sprint) return null;
+    if (data.status === 'active') {
+      _data.sprints.forEach(s => { if (s.id !== id && s.status === 'active') s.status = 'completed'; });
+    }
+    Object.assign(sprint, data);
     queries._persist();
     return sprint;
   },

@@ -14,6 +14,11 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // ── Sprints ──
 app.get('/api/sprints', (req, res) => res.json(queries.getSprints()));
 app.post('/api/sprints', (req, res) => res.json(queries.createSprint(req.body)));
+app.patch('/api/sprints/:id', (req, res) => {
+  const sprint = queries.updateSprint(req.params.id, req.body);
+  if (!sprint) return res.status(404).json({ error: 'Not found' });
+  res.json(sprint);
+});
 
 // ── Items (Backlog / Kanban) ──
 app.get('/api/items', (req, res) => res.json(queries.getItems(req.query)));

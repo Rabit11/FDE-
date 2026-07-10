@@ -5,7 +5,8 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "dev": "node --watch server/index.js",
+    "publish": "node scripts/publish-github.js"
   },
   "keywords": ["agile", "ai", "project-management", "kanban", "scrum"],
   "license": "MIT",
