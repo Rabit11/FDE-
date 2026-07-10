@@ -2,9 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const multer = require('multer');
 const { queries } = require('./db');
 const ai = require('./ai/engine');
 const llm = require('./ai/llm');
+const asr = require('./ai/asr');
+const voice = require('./ai/voice');
 const { ROLES, login, logout, authMiddleware, requirePermission } = require('./auth');
 
 // Load .env if present
@@ -43,7 +46,7 @@ app.post('/api/auth/logout', auth, (req, res) => {
 });
 
 app.get('/api/auth/me', auth, (req, res) => {
-  res.json({ user: req.user, roleConfig: ROLES[req.user.role], llmEnabled: llm.isConfigured() });
+  res.json({ user: req.user, roleConfig: ROLES[req.user.role], llmEnabled: llm.isConfigured(), ai: llm.getProviderInfo() });
 });
 
 // ── Protected API ──
@@ -178,13 +181,51 @@ app.get('/api/ai/chat-history', (req, res) => {
   res.json(queries.getChatHistory(req.user.id));
 });
 
+// ── Voice: 语音上传 → 转写 → 分析 → 拆任务 ──
+const upload = multer({
+  dest: path.join(__dirname, '..', 'data', 'uploads'),
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = /\.(mp3|wav|m4a|webm|ogg|aac|flac|mp4)$/i;
+    cb(null, allowed.test(file.originalname) || file.mimetype.startsWith('audio/'));
+  },
+});
+
+app.get('/api/ai/voice/docs', (req, res) => res.json(queries.getVoiceDocs()));
+app.get('/api/ai/voice/docs/:id', (req, res) => {
+  const doc = queries.getVoiceDoc(req.params.id);
+  if (!doc) return res.status(404).json({ error: '文档不存在' });
+  res.json(doc);
+});
+
+app.post('/api/ai/voice/process', upload.single('audio'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '请上传语音文件' });
+  try {
+    const result = await voice.processVoiceFile(
+      req.file.path, req.file.originalname, req.file.mimetype,
+      req.user, queries, { autoCreate: req.body.autoCreate !== 'false', sprint_id: req.body.sprint_id },
+    );
+    fs.unlink(req.file.path, () => {});
+    res.json(result);
+  } catch (err) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/ai/status', (req, res) => {
+  res.json(llm.getProviderInfo());
+});
+
 // ── SPA fallback ──
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
 app.listen(PORT, () => {
+  const info = llm.getProviderInfo();
   console.log(`\n  🚀 AI 敏捷管理平台已启动`);
   console.log(`  📍 http://localhost:${PORT}`);
-  console.log(`  🤖 LLM 引擎: ${llm.isConfigured() ? '已启用' : '规则模式 (配置 .env 启用 LLM)'}\n`);
+  console.log(`  🧠 大模型: ${info.llm ? `${info.llm.provider} (${info.llm.model})` : '未配置 (规则模式)'}`);
+  console.log(`  🎙️ 语音转写: ${info.asr ? `${info.asr.provider} (${info.asr.model})` : '未配置 DASHSCOPE_API_KEY'}\n`);
 });

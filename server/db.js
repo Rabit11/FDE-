@@ -10,11 +10,12 @@ if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 function load() {
   if (!fs.existsSync(dbFile)) {
-    return { users: [], sprints: [], items: [], activity_log: [], ai_insights: [], chat_history: [] };
+    return { sprints: [], items: [], activity_log: [], ai_insights: [], chat_history: [], voice_documents: [] };
   }
   const data = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
   if (!data.users) data.users = [];
   if (!data.chat_history) data.chat_history = [];
+  if (!data.voice_documents) data.voice_documents = [];
   return data;
 }
 
@@ -231,6 +232,17 @@ const queries = {
     return insight;
   },
   getInsights(limit = 20) { return _data.ai_insights.slice(0, limit); },
+
+  saveVoiceDoc(doc) {
+    _data.voice_documents.unshift(doc);
+    if (_data.voice_documents.length > 100) _data.voice_documents = _data.voice_documents.slice(0, 100);
+    queries._persist();
+    return doc;
+  },
+  getVoiceDocs(limit = 20) {
+    return _data.voice_documents.slice(0, limit);
+  },
+  getVoiceDoc(id) { return _data.voice_documents.find(d => d.id === id); },
 };
 
 module.exports = { queries };

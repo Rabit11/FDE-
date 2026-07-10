@@ -12,7 +12,7 @@ const KANBAN_COLS = [
 const STATUS_LABELS = Object.fromEntries(KANBAN_COLS.map(c => [c.id, c.label]));
 const TYPE_LABELS = { epic: 'Epic', story: 'Story', task: 'Task', bug: 'Bug' };
 
-let state = { items: [], sprints: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], currentView: '', activeSprint: null, user: null, roleConfig: null, llmEnabled: false };
+let state = { items: [], sprints: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], currentView: '', activeSprint: null, user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null };
 
 function getToken() { return localStorage.getItem('agileai_token'); }
 
@@ -398,16 +398,167 @@ function renderTeam() {
     </div>`;
 }
 
+function renderVoice() {
+  const ai = state.aiStatus || {};
+  const llmInfo = ai.llm ? `${ai.llm.provider} · ${ai.llm.model}` : '未配置';
+  const asrInfo = ai.asr ? `${ai.asr.provider} · ${ai.asr.model}` : '未配置 DASHSCOPE_API_KEY';
+  const ready = ai.ready;
+  return `
+    <div class="voice-hero card">
+      <h2>🎙️ 语音需求智能处理</h2>
+      <p style="color:var(--muted);margin:0.5rem 0 1rem">上传会议录音或现场录音 → 国产大模型转写 → 梳理文档 → 自动拆解任务</p>
+      <div class="engine-status">
+        <span class="engine-chip ${ai.llm ? 'on' : 'off'}">🧠 ${llmInfo}</span>
+        <span class="engine-chip ${ai.asr ? 'on' : 'off'}">🎙️ ${asrInfo}</span>
+      </div>
+      ${!ready ? '<p class="voice-warn">⚠️ 请在 .env 配置 DEEPSEEK_API_KEY + DASHSCOPE_API_KEY 启用完整能力</p>' : ''}
+    </div>
+    <div class="voice-panel">
+      <div class="voice-upload-zone" id="voiceDropZone">
+        <input type="file" id="voiceFileInput" accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg" hidden>
+        <div class="upload-icon">📁</div>
+        <p><strong>拖拽语音文件到此处</strong> 或 <button class="btn btn-ghost btn-sm" onclick="document.getElementById('voiceFileInput').click()">选择文件</button></p>
+        <p style="font-size:0.78rem;color:var(--muted)">支持 MP3 / WAV / M4A / WebM，最大 50MB</p>
+        <div style="margin-top:1rem;display:flex;gap:0.5rem;justify-content:center;flex-wrap:wrap">
+          <button class="btn btn-primary" id="btnRecord" onclick="toggleRecording()">🔴 开始录音</button>
+          <label style="font-size:0.82rem;display:flex;align-items:center;gap:0.35rem;color:var(--muted)">
+            <input type="checkbox" id="autoCreateTasks" checked> 自动创建任务到 Backlog
+          </label>
+        </div>
+        <div id="recordStatus" style="margin-top:0.5rem;font-size:0.82rem;color:var(--danger);display:none"></div>
+      </div>
+      <div id="voiceProgress" style="display:none" class="card">
+        <div class="voice-progress-steps">
+          <div class="vstep" id="vstep1">① 语音转文字...</div>
+          <div class="vstep" id="vstep2">② 大模型分析梳理...</div>
+          <div class="vstep" id="vstep3">③ 拆解任务入库...</div>
+        </div>
+      </div>
+      <div id="voiceResult" style="display:none"></div>
+    </div>
+    <div class="section-title">历史语音文档</div>
+    <div class="voice-history" id="voiceHistory">
+      ${(state.voiceDocs || []).map(d => `
+        <div class="voice-doc-card" onclick="showVoiceDoc('${d.id}')">
+          <div class="voice-doc-title">${esc(d.summary?.slice(0, 60) || d.filename)}</div>
+          <div class="voice-doc-meta">${fmtTime(d.created_at)} · ${esc(d.user_name)} · ${esc(d.llm_provider || '')}</div>
+        </div>`).join('') || '<div class="empty-state">暂无语音处理记录</div>'}
+    </div>`;
+}
+
+let audioChunks = [];
+async function loadVoiceDocs() {
+  try { state.voiceDocs = await api('/ai/voice/docs'); } catch { state.voiceDocs = []; }
+}
+
+async function processVoiceFile(file) {
+  if (!file) return;
+  const progress = document.getElementById('voiceProgress');
+  const resultEl = document.getElementById('voiceResult');
+  progress.style.display = 'block';
+  resultEl.style.display = 'none';
+  ['vstep1','vstep2','vstep3'].forEach(id => { const el = document.getElementById(id); if (el) el.className = 'vstep'; });
+  const setStep = (id, cls) => { const el = document.getElementById(id); if (el) el.classList.add(cls); };
+  setStep('vstep1', 'active');
+  toast('正在处理语音...');
+  const form = new FormData();
+  form.append('audio', file);
+  form.append('autoCreate', document.getElementById('autoCreateTasks')?.checked !== false ? 'true' : 'false');
+  try {
+    const res = await fetch(API + '/ai/voice/process', {
+      method: 'POST',
+      headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
+      body: form,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '处理失败');
+    setStep('vstep1', 'done'); setStep('vstep2', 'active');
+    await new Promise(r => setTimeout(r, 200));
+    setStep('vstep2', 'done'); setStep('vstep3', 'active');
+    await new Promise(r => setTimeout(r, 200));
+    setStep('vstep3', 'done');
+    progress.style.display = 'none';
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = `
+      <div class="card" style="margin-bottom:1rem"><h3>✅ 处理完成 (${(data.duration_ms/1000).toFixed(1)}s)</h3>
+        <p style="font-size:0.85rem;color:var(--muted)">ASR: ${esc(data.engines?.asr)} · LLM: ${esc(data.engines?.llm)}</p></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+        <div class="card"><div class="section-title">📝 转写原文</div><div class="ai-result" style="display:block;max-height:300px">${esc(data.transcript)}</div></div>
+        <div class="card"><div class="section-title">📄 需求文档</div><div class="ai-result" style="display:block;max-height:300px">${esc(data.document)}</div></div>
+      </div>
+      <div class="card" style="margin-top:1rem">
+        <div class="section-title">📋 拆解结果</div><p>${esc(data.summary)}</p>
+        <div class="backlog-list" style="margin-top:0.75rem">
+          ${(data.createdItems?.stories || []).map(s => `<div class="backlog-item"><span class="type-badge type-story">Story</span><div class="info"><div class="title">${esc(s.title)}</div><div class="desc">${s.story_points||0} SP</div></div></div>`).join('')}
+        </div>
+      </div>`;
+    toast('语音处理完成');
+    await loadVoiceDocs();
+  } catch (e) {
+    setStep('vstep1', 'error');
+    toast(e.message, 'error');
+    progress.style.display = 'none';
+  }
+}
+
+async function toggleRecording() {
+  const btn = document.getElementById('btnRecord');
+  const status = document.getElementById('recordStatus');
+  if (!state.recording) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.mediaRecorder = new MediaRecorder(stream);
+      audioChunks = [];
+      state.mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+      state.mediaRecorder.onstop = () => {
+        const blob = new Blob(audioChunks, { type: 'audio/webm' });
+        processVoiceFile(new File([blob], `recording-${Date.now()}.webm`, { type: 'audio/webm' }));
+        stream.getTracks().forEach(t => t.stop());
+      };
+      state.mediaRecorder.start();
+      state.recording = true;
+      btn.textContent = '⏹ 停止录音';
+      btn.classList.add('btn-danger');
+      status.style.display = 'block';
+      status.textContent = '● 录音中...';
+    } catch { toast('无法访问麦克风', 'error'); }
+  } else {
+    state.mediaRecorder?.stop();
+    state.recording = false;
+    btn.textContent = '🔴 开始录音';
+    btn.classList.remove('btn-danger');
+    status.style.display = 'none';
+  }
+}
+
+function showVoiceDoc(id) {
+  const doc = state.voiceDocs.find(d => d.id === id);
+  if (!doc) return;
+  showModal('语音需求文档', `<div class="ai-result" style="display:block;max-height:60vh">${esc(doc.document)}</div>`);
+}
+
+function initVoiceUpload() {
+  const zone = document.getElementById('voiceDropZone');
+  const input = document.getElementById('voiceFileInput');
+  if (!zone || !input) return;
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) processVoiceFile(e.dataTransfer.files[0]); });
+  input.addEventListener('change', () => { if (input.files[0]) processVoiceFile(input.files[0]); });
+}
+
 // ── Actions ──
 async function navigate(view) {
   state.currentView = view;
   document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
-  const titles = { dashboard: '仪表盘', kanban: '流动看板', backlog: 'Backlog', sprint: 'Sprint', review: '审核分配', acceptance: '验收中心', ai: 'AI 助手', mywork: '我的工作台', submit: '提交需求', team: '团队管理' };
+  const titles = { dashboard: '仪表盘', kanban: '流动看板', backlog: 'Backlog', sprint: 'Sprint', review: '审核分配', acceptance: '验收中心', ai: 'AI 助手', mywork: '我的工作台', submit: '提交需求', team: '团队管理', voice: '语音需求' };
   document.getElementById('pageTitle').textContent = titles[view] || view;
   await loadData();
-  const renderers = { dashboard: renderDashboard, kanban: renderKanban, backlog: renderBacklog, sprint: renderSprint, review: renderReview, acceptance: renderAcceptance, ai: renderAI, mywork: renderMyWork, submit: renderSubmit, team: renderTeam };
+  if (view === 'voice') await loadVoiceDocs();
+  const renderers = { dashboard: renderDashboard, kanban: renderKanban, backlog: renderBacklog, sprint: renderSprint, review: renderReview, acceptance: renderAcceptance, ai: renderAI, mywork: renderMyWork, submit: renderSubmit, team: renderTeam, voice: renderVoice };
   document.getElementById('content').innerHTML = renderers[view] ? renderers[view]() : '<div class="empty-state">页面不存在</div>';
   if (view === 'kanban') initDragDrop();
+  if (view === 'voice') initVoiceUpload();
 }
 
 async function moveItem(id, newStatus) {
@@ -724,6 +875,7 @@ async function initApp() {
     state.user = me.user;
     state.roleConfig = me.roleConfig;
     state.llmEnabled = me.llmEnabled;
+    state.aiStatus = me.ai;
     setupUserCard();
     buildNav();
     buildTopbar();

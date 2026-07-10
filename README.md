@@ -47,6 +47,20 @@ cp .env.example .env
 
 未配置时自动使用本地规则引擎，配置后 AI 拆分/站会/风险/Copilot 全面升级为 LLM 驱动。
 
+## 语音需求（国产 AI 全链路）
+
+侧边栏 **🎙️ 语音需求** 支持：
+
+1. **上传录音** 或 **浏览器现场录音**（MP3/WAV/M4A/WebM）
+2. **阿里云 Paraformer** 语音转文字（国产 ASR）
+3. **DeepSeek V3** 分析梳理生成 Markdown 需求文档
+4. **自动拆解** Epic → Story → Task 并写入 Backlog
+
+```env
+DEEPSEEK_API_KEY=sk-xxx      # 大模型分析+拆任务
+DASHSCOPE_API_KEY=sk-xxx     # 语音转写
+```
+
 ## 技术栈
 
 - **后端**: Node.js + Express + JSON 持久化存储

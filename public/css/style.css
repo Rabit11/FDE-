@@ -108,6 +108,33 @@ body {
 .team-name { font-weight: 600; font-size: 0.9rem; }
 .team-meta { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
 
+.voice-hero h2 { margin-bottom: 0.25rem; }
+.engine-status { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.engine-chip { font-size: 0.78rem; padding: 0.3rem 0.65rem; border-radius: 6px; border: 1px solid var(--border); }
+.engine-chip.on { background: rgba(34,197,94,0.1); border-color: var(--success); color: var(--success); }
+.engine-chip.off { background: rgba(136,153,180,0.08); color: var(--muted); }
+.voice-warn { font-size: 0.82rem; color: var(--warning); margin-top: 0.75rem; }
+
+.voice-upload-zone {
+  border: 2px dashed var(--border); border-radius: 12px; padding: 2.5rem 1.5rem;
+  text-align: center; transition: all 0.2s; background: var(--surface);
+}
+.voice-upload-zone.drag-over { border-color: var(--accent); background: rgba(59,130,246,0.05); }
+.upload-icon { font-size: 2.5rem; margin-bottom: 0.5rem; }
+
+.voice-progress-steps { display: flex; gap: 1rem; flex-wrap: wrap; }
+.vstep { padding: 0.5rem 1rem; border-radius: 8px; background: var(--bg); font-size: 0.85rem; color: var(--muted); }
+.vstep.active { background: rgba(59,130,246,0.15); color: var(--accent); }
+.vstep.done { background: rgba(34,197,94,0.15); color: var(--success); }
+.vstep.error { background: rgba(239,68,68,0.15); color: var(--danger); }
+
+.voice-doc-card { padding: 0.75rem 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem; cursor: pointer; transition: all 0.15s; }
+.voice-doc-card:hover { border-color: var(--accent); }
+.voice-doc-title { font-weight: 600; font-size: 0.88rem; }
+.voice-doc-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem; }
+
+.tag.blue { background: rgba(59,130,246,0.15); color: var(--accent); }
+
 .sidebar-footer { padding: 1rem; border-top: 1px solid var(--border); }
 .sprint-badge { font-size: 0.75rem; color: var(--muted); padding: 0.5rem; background: var(--surface); border-radius: 6px; }
 

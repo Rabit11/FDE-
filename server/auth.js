@@ -6,6 +6,7 @@ const ROLES = {
     badge: 'admin',
     nav: [
       { id: 'dashboard', label: '📊 全局仪表盘' },
+      { id: 'voice', label: '🎙️ 语音需求' },
       { id: 'kanban', label: '📋 流动看板' },
       { id: 'backlog', label: '📝 Backlog' },
       { id: 'sprint', label: '🏃 Sprint' },
@@ -21,6 +22,7 @@ const ROLES = {
     badge: 'manager',
     nav: [
       { id: 'dashboard', label: '📊 管理仪表盘' },
+      { id: 'voice', label: '🎙️ 语音需求' },
       { id: 'kanban', label: '📋 团队看板' },
       { id: 'backlog', label: '📝 Backlog' },
       { id: 'sprint', label: '🏃 Sprint' },
@@ -35,6 +37,7 @@ const ROLES = {
     badge: 'executor',
     nav: [
       { id: 'mywork', label: '💼 我的工作台' },
+      { id: 'voice', label: '🎙️ 语音提交' },
       { id: 'kanban', label: '📋 任务看板' },
       { id: 'submit', label: '📤 提交需求' },
       { id: 'ai', label: '🤖 AI 协作者' },
