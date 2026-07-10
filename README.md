@@ -26,6 +26,27 @@ npm start
 
 GitHub: **https://github.com/Rabit11/ai-agile-platform**
 
+## 角色与登录
+
+| 角色 | 工号示例 | 密码 | 工作台 |
+|------|---------|------|--------|
+| 超级管理员 | 666666 | aiic@2026 | 全局管理 + 团队 + AI 指挥中心 |
+| 管理员 | 600412 (曾锐) | 同左 | 审核分配 + Sprint + 验收 |
+| 执行人员 | 600785 (赵立泽) | 同左 | 我的任务 + 提交需求 + AI 协作者 |
+
+登录页: **http://localhost:3456/login.html**
+
+## LLM 智能引擎（可选）
+
+复制 `.env.example` 为 `.env`，配置 OpenAI 兼容 API Key 即可启用 LLM 增强：
+
+```bash
+cp .env.example .env
+# 编辑 OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL
+```
+
+未配置时自动使用本地规则引擎，配置后 AI 拆分/站会/风险/Copilot 全面升级为 LLM 驱动。
+
 ## 技术栈
 
 - **后端**: Node.js + Express + JSON 持久化存储

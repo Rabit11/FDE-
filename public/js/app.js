@@ -12,25 +12,53 @@ const KANBAN_COLS = [
 const STATUS_LABELS = Object.fromEntries(KANBAN_COLS.map(c => [c.id, c.label]));
 const TYPE_LABELS = { epic: 'Epic', story: 'Story', task: 'Task', bug: 'Bug' };
 
-let state = { items: [], sprints: [], metrics: {}, activity: [], insights: [], currentView: 'dashboard', activeSprint: null };
+let state = { items: [], sprints: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], currentView: '', activeSprint: null, user: null, roleConfig: null, llmEnabled: false };
 
-// ── API helpers ──
+function getToken() { return localStorage.getItem('agileai_token'); }
+
 async function api(path, opts = {}) {
-  const res = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(API + path, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  if (res.status === 401) { localStorage.clear(); location.href = '/login.html'; return; }
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   return res.json();
 }
 
 async function loadData() {
-  const [items, sprints, metrics, activity, insights] = await Promise.all([
-    api('/items'), api('/sprints'), api('/metrics'), api('/activity?limit=30'), api('/ai/insights'),
+  const [items, sprints, metrics, activity, insights, users] = await Promise.all([
+    api('/items'), api('/sprints'), api('/metrics'), api('/activity?limit=30'), api('/ai/insights'), api('/users'),
   ]);
-  state = { ...state, items, sprints, metrics, activity, insights, activeSprint: sprints.find(s => s.status === 'active') };
+  state = { ...state, items, sprints, metrics, activity, insights, users, activeSprint: sprints.find(s => s.status === 'active') };
   updateSprintBadge();
+}
+
+function buildNav() {
+  const nav = document.getElementById('navMenu');
+  const items = state.roleConfig?.nav || [];
+  nav.innerHTML = items.map(n => `<button class="nav-item" data-view="${n.id}">${n.label}</button>`).join('');
+  nav.querySelectorAll('.nav-item').forEach(btn => btn.addEventListener('click', () => navigate(btn.dataset.view)));
+}
+
+function buildTopbar() {
+  const el = document.getElementById('topbarActions');
+  const role = state.user?.role;
+  if (role === 'executor') {
+    el.innerHTML = `<button class="btn btn-ghost" id="btnStandup">📋 站会</button><button class="btn btn-primary" id="btnNewItem">+ 上报进度</button>`;
+  } else {
+    el.innerHTML = `<button class="btn btn-ghost" id="btnStandup">📋 站会摘要</button><button class="btn btn-ghost" id="btnRisks">⚠️ 风险扫描</button><button class="btn btn-primary" id="btnNewItem">+ 新建</button>`;
+  }
+  document.getElementById('btnNewItem')?.addEventListener('click', () => role === 'executor' ? navigate('submit') : showNewItemModal());
+  document.getElementById('btnStandup')?.addEventListener('click', runStandup);
+  document.getElementById('btnRisks')?.addEventListener('click', runRisks);
+}
+
+function setupUserCard() {
+  const u = state.user;
+  document.getElementById('userName').textContent = u.name;
+  document.getElementById('userAvatar').textContent = u.name.slice(0, 1);
+  document.getElementById('userRole').innerHTML = `<span class="role-badge role-${u.role}">${state.roleConfig?.label || u.role}</span> · ${u.dept || ''}`;
 }
 
 function updateSprintBadge() {
@@ -243,34 +271,130 @@ function renderAcceptance() {
 }
 
 function renderAI() {
+  const showSplit = state.user?.role !== 'executor';
   return `
     <div class="ai-panel">
-      <div class="ai-card">
-        <h3>🧠 AI 需求拆分</h3>
-        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem">输入自然语言需求，AI 自动拆分为 Epic + Story + Task</p>
-        <div class="form-group">
-          <textarea id="aiRequirement" placeholder="例：我们需要一个 AI 赋能的敏捷看板，支持拖拽、WIP 限制、Sprint 管理和在线验收..."></textarea>
-        </div>
+      ${showSplit ? `<div class="ai-card">
+        <h3>🧠 AI 需求拆分 ${state.llmEnabled ? '<span class="llm-tag">LLM</span>' : ''}</h3>
+        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem">自然语言需求 → Epic + Story + Task</p>
+        <div class="form-group"><textarea id="aiRequirement" placeholder="描述你的需求..."></textarea></div>
         <button class="btn btn-primary" onclick="runSplit()">🚀 AI 拆分并创建</button>
         <div class="ai-result" id="aiSplitResult" style="display:none"></div>
-      </div>
-      <div class="ai-card">
-        <h3>📡 AI 洞察中心</h3>
-        <div style="display:flex;gap:0.5rem;margin-bottom:0.75rem;flex-wrap:wrap">
+      </div>` : ''}
+      <div class="ai-card" style="${showSplit ? '' : 'grid-column:1/-1'}">
+        <h3>💬 AI 智能协作者 ${state.llmEnabled ? '<span class="llm-tag">LLM</span>' : '<span class="llm-tag local">本地</span>'}</h3>
+        <div class="chat-box" id="chatBox">
+          <div class="chat-messages" id="chatMessages">
+            <div class="chat-msg assistant">你好 ${esc(state.user?.name)}！我是 AgileAI 协作者，可以帮你分析任务、评估风险、规划 Sprint。</div>
+          </div>
+          <div class="chat-input-row">
+            <input id="chatInput" placeholder="问我 anything：任务进度、风险分析、拆分建议..." onkeydown="if(event.key==='Enter')sendChat()">
+            <button class="btn btn-primary btn-sm" onclick="sendChat()">发送</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="quickChat('我当前有哪些任务？')">我的任务</button>
+          <button class="btn btn-ghost btn-sm" onclick="quickChat('分析当前项目风险')">风险分析</button>
           <button class="btn btn-ghost btn-sm" onclick="runStandup()">站会摘要</button>
           <button class="btn btn-ghost btn-sm" onclick="runRisks()">风险扫描</button>
-          <button class="btn btn-ghost btn-sm" onclick="runRetro()">Retro 报告</button>
-        </div>
-        <div class="insight-list" id="insightList">
-          ${state.insights.map(i => `
-            <div class="insight-item ${i.severity}">
-              <div class="insight-title">${esc(i.title)}</div>
-              <div class="insight-time">${fmtTime(i.created_at)} · ${i.type}</div>
-              <div class="insight-content">${esc(i.content)}</div>
-            </div>
-          `).join('') || '<div class="empty-state">暂无 AI 洞察</div>'}
+          ${showSplit ? '<button class="btn btn-ghost btn-sm" onclick="runRetro()">Retro</button>' : ''}
         </div>
       </div>
+      ${showSplit ? `<div class="ai-card" style="grid-column:1/-1">
+        <h3>📡 AI 洞察历史</h3>
+        <div class="insight-list" id="insightList">
+          ${state.insights.map(i => `<div class="insight-item ${i.severity}"><div class="insight-title">${esc(i.title)}</div><div class="insight-time">${fmtTime(i.created_at)} · ${i.type}</div><div class="insight-content">${esc(i.content)}</div></div>`).join('') || '<div class="empty-state">暂无</div>'}
+        </div>
+      </div>` : ''}
+    </div>`;
+}
+
+function renderMyWork() {
+  const mine = state.items.filter(i => i.assignee === state.user.name);
+  const active = mine.filter(i => ['todo', 'in_progress', 'blocked', 'review'].includes(i.status));
+  const done = mine.filter(i => i.status === 'done');
+  const submitted = state.items.filter(i => i.created_by === state.user.name);
+  return `
+    <div class="card-grid">
+      <div class="card stat-card blue"><div class="label">我的任务</div><div class="value">${mine.length}</div></div>
+      <div class="card stat-card yellow"><div class="label">进行中</div><div class="value">${active.length}</div></div>
+      <div class="card stat-card green"><div class="label">已完成</div><div class="value">${done.length}</div></div>
+      <div class="card stat-card purple"><div class="label">我提交的</div><div class="value">${submitted.length}</div></div>
+    </div>
+    <div class="section-title">待办任务</div>
+    <div class="backlog-list">
+      ${active.map(i => `<div class="backlog-item" onclick="showItemDetail('${i.id}')">
+        <div class="priority-dot priority-${i.priority}"></div>
+        <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
+        <div class="info"><div class="title">${esc(i.title)}</div><div class="desc">${STATUS_LABELS[i.status]} · ${i.story_points || 0} SP</div></div>
+      </div>`).join('') || '<div class="empty-state">暂无待办 🎉</div>'}
+    </div>
+    <div style="margin-top:1rem;display:flex;gap:0.5rem">
+      <button class="btn btn-primary" onclick="navigate('submit')">📤 提交需求</button>
+      <button class="btn btn-ghost" onclick="quickChat('帮我规划今天的工作优先级')">🤖 AI 规划今日</button>
+    </div>`;
+}
+
+function renderSubmit() {
+  return `
+    <div class="card" style="max-width:640px">
+      <h3 style="margin-bottom:0.75rem">📤 提交需求</h3>
+      <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">提交后将进入管理员审核队列，审核通过后分配执行人。</p>
+      <div class="form-group"><label>需求标题</label><input id="reqTitle" placeholder="简要描述你的需求"></div>
+      <div class="form-group"><label>应用场景</label><textarea id="reqScene" placeholder="描述应用场景和业务目标..."></textarea></div>
+      <div class="form-group"><label>验收目标</label><textarea id="reqAccept" placeholder="期望达成什么效果？"></textarea></div>
+      <div class="form-group"><label>期望时间</label><input id="reqDeadline" type="date"></div>
+      <button class="btn btn-primary" onclick="submitRequirement()">提交需求</button>
+      <button class="btn btn-ghost" style="margin-left:0.5rem" onclick="aiAssistSubmit()">🤖 AI 辅助填写</button>
+    </div>
+    <div class="section-title">我提交的需求</div>
+    <div class="backlog-list">
+      ${state.items.filter(i => i.created_by === state.user.name).map(i => `
+        <div class="backlog-item" onclick="showItemDetail('${i.id}')">
+          <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
+          <div class="info"><div class="title">${esc(i.title)}</div><div class="desc">${STATUS_LABELS[i.status] || i.status} · 提交于 ${fmtTime(i.created_at)}</div></div>
+        </div>`).join('') || '<div class="empty-state">暂无提交记录</div>'}
+    </div>`;
+}
+
+function renderReview() {
+  const pending = state.items.filter(i => i.status === 'submitted' || (i.status === 'backlog' && !i.assignee && i.created_by));
+  const executors = state.users.filter(u => u.role === 'executor');
+  return `
+    <div class="section-title">待审核需求 (${pending.length})</div>
+    ${pending.length ? pending.map(i => `
+      <div class="accept-card">
+        <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
+        <h3>${esc(i.title)}</h3>
+        <p style="color:var(--muted);font-size:0.85rem">${esc(i.description || '')}</p>
+        <p style="font-size:0.82rem">提交人: <strong>${esc(i.created_by || '未知')}</strong> · ${i.story_points || 0} SP</p>
+        <div class="accept-actions">
+          <select id="assign-${i.id}" style="padding:0.35rem 0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-right:0.5rem">
+            <option value="">选择执行人</option>
+            ${executors.map(e => `<option value="${esc(e.name)}">${esc(e.name)}</option>`).join('')}
+          </select>
+          <button class="btn btn-ghost btn-sm" onclick="aiAssign('${i.id}')">🤖 AI推荐</button>
+          <button class="btn btn-success btn-sm" onclick="reviewItem('${i.id}','approve')">✅ 通过并分配</button>
+          <button class="btn btn-danger btn-sm" onclick="reviewItem('${i.id}','reject')">❌ 驳回</button>
+        </div>
+      </div>`).join('') : '<div class="empty-state">✅ 无待审核需求</div>'}`;
+}
+
+function renderTeam() {
+  const roleLabels = { admin: '超级管理员', manager: '管理员', executor: '执行人员' };
+  return `
+    <div class="section-title">团队成员 (${state.users.length})</div>
+    <div class="team-grid">
+      ${state.users.map(u => {
+        const workload = state.items.filter(i => i.assignee === u.name && !['done','backlog'].includes(i.status)).length;
+        return `<div class="team-card">
+          <div class="team-avatar">${u.name.slice(0,1)}</div>
+          <div class="team-info">
+            <div class="team-name">${esc(u.name)} <span class="role-badge role-${u.role}">${roleLabels[u.role]}</span></div>
+            <div class="team-meta">工号 ${u.emp_id} · ${u.dept || ''} · 进行中 ${workload} 项</div>
+          </div>
+        </div>`;
+      }).join('')}
     </div>`;
 }
 
@@ -278,12 +402,11 @@ function renderAI() {
 async function navigate(view) {
   state.currentView = view;
   document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
-  const titles = { dashboard: '仪表盘', kanban: '流动看板', backlog: 'Backlog', sprint: 'Sprint', acceptance: '验收中心', ai: 'AI 助手' };
-  document.getElementById('pageTitle').textContent = titles[view];
+  const titles = { dashboard: '仪表盘', kanban: '流动看板', backlog: 'Backlog', sprint: 'Sprint', review: '审核分配', acceptance: '验收中心', ai: 'AI 助手', mywork: '我的工作台', submit: '提交需求', team: '团队管理' };
+  document.getElementById('pageTitle').textContent = titles[view] || view;
   await loadData();
-  const content = document.getElementById('content');
-  const renderers = { dashboard: renderDashboard, kanban: renderKanban, backlog: renderBacklog, sprint: renderSprint, acceptance: renderAcceptance, ai: renderAI };
-  content.innerHTML = renderers[view]();
+  const renderers = { dashboard: renderDashboard, kanban: renderKanban, backlog: renderBacklog, sprint: renderSprint, review: renderReview, acceptance: renderAcceptance, ai: renderAI, mywork: renderMyWork, submit: renderSubmit, team: renderTeam };
+  document.getElementById('content').innerHTML = renderers[view] ? renderers[view]() : '<div class="empty-state">页面不存在</div>';
   if (view === 'kanban') initDragDrop();
 }
 
@@ -515,8 +638,98 @@ async function runRisks() {
 async function runRetro() {
   toast('AI 生成 Retro 报告...');
   const result = await api('/ai/retro', { method: 'POST' });
-  showModal('Sprint Retro 报告', `<div class="ai-result" style="display:block;max-height:60vh">${esc(result.content)}</div>`);
+  showModal(`Sprint Retro (${result.engine === 'llm' ? 'LLM' : '本地'})`, `<div class="ai-result" style="display:block;max-height:60vh">${esc(result.content)}</div>`);
   await loadData();
+}
+
+async function sendChat() {
+  const input = document.getElementById('chatInput');
+  const q = input?.value?.trim();
+  if (!q) return;
+  appendChat('user', q);
+  input.value = '';
+  try {
+    const result = await api('/ai/copilot', { method: 'POST', body: { question: q } });
+    appendChat('assistant', result.answer, result.engine);
+  } catch (e) { appendChat('assistant', '抱歉，处理失败：' + e.message); }
+}
+
+function quickChat(q) { navigate('ai').then(() => { setTimeout(() => { const el = document.getElementById('chatInput'); if (el) { el.value = q; sendChat(); } }, 300); }); }
+function appendChat(role, text, engine) {
+  const box = document.getElementById('chatMessages');
+  if (!box) return;
+  const div = document.createElement('div');
+  div.className = `chat-msg ${role}`;
+  div.innerHTML = `${esc(text)}${engine ? `<span class="engine-tag">${engine}</span>` : ''}`;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+async function submitRequirement() {
+  const title = document.getElementById('reqTitle').value;
+  const scene = document.getElementById('reqScene').value;
+  const accept = document.getElementById('reqAccept').value;
+  const deadline = document.getElementById('reqDeadline').value;
+  if (!title.trim()) return toast('请填写需求标题', 'error');
+  await api('/items', { method: 'POST', body: {
+    type: 'story', title, description: `场景: ${scene}\n验收: ${accept}\n期望: ${deadline}`,
+    acceptance_criteria: accept, story_points: 3, priority: 2,
+  }});
+  toast('需求已提交，等待管理员审核');
+  await navigate('submit');
+}
+
+async function aiAssistSubmit() {
+  const scene = document.getElementById('reqScene').value;
+  if (!scene.trim()) return toast('请先填写应用场景', 'error');
+  toast('AI 辅助生成中...');
+  const result = await api('/ai/copilot', { method: 'POST', body: { question: `根据以下场景生成需求标题和验收标准，简洁回答：\n${scene}` } });
+  showModal('AI 辅助建议', `<div class="ai-result" style="display:block">${esc(result.answer)}</div>`);
+}
+
+async function reviewItem(id, action) {
+  const assignee = document.getElementById(`assign-${id}`)?.value;
+  if (action === 'approve' && !assignee) return toast('请选择执行人', 'error');
+  if (action === 'reject') {
+    const comment = prompt('驳回原因：');
+    if (!comment) return;
+    await api(`/items/${id}/review`, { method: 'POST', body: { action, comment } });
+  } else {
+    await api(`/items/${id}/review`, { method: 'POST', body: { action, assignee } });
+  }
+  toast(action === 'approve' ? '已通过并分配' : '已驳回');
+  await navigate('review');
+}
+
+async function aiAssign(id) {
+  toast('AI 分析最佳人选...');
+  const result = await api(`/items/${id}/suggest-assignee`, { method: 'POST' });
+  if (result?.assignee) {
+    const sel = document.getElementById(`assign-${id}`);
+    if (sel) sel.value = result.assignee;
+    toast(`AI 推荐: ${result.assignee} (${result.reason})`);
+  }
+}
+
+async function logout() {
+  try { await api('/auth/logout', { method: 'POST' }); } catch {}
+  localStorage.clear();
+  location.href = '/login.html';
+}
+
+async function initApp() {
+  if (!getToken()) { location.href = '/login.html'; return; }
+  try {
+    const me = await api('/auth/me');
+    state.user = me.user;
+    state.roleConfig = me.roleConfig;
+    state.llmEnabled = me.llmEnabled;
+    setupUserCard();
+    buildNav();
+    buildTopbar();
+    const defaultView = state.roleConfig?.nav?.[0]?.id || 'dashboard';
+    await navigate(defaultView);
+  } catch { localStorage.clear(); location.href = '/login.html'; }
 }
 
 // ── Utils ──
@@ -524,12 +737,9 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s || 
 function fmtTime(t) { if (!t) return ''; const d = new Date(t.includes('T') ? t : t + 'Z'); return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); }
 
 // ── Init ──
-document.querySelectorAll('.nav-item').forEach(btn => btn.addEventListener('click', () => navigate(btn.dataset.view)));
-document.getElementById('btnNewItem').addEventListener('click', showNewItemModal);
-document.getElementById('btnStandup').addEventListener('click', runStandup);
-document.getElementById('btnRisks').addEventListener('click', runRisks);
 document.getElementById('modalClose').addEventListener('click', closeModal);
 document.getElementById('modalOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
-document.getElementById('activeSprintBadge').addEventListener('click', () => navigate('sprint'));
+document.getElementById('activeSprintBadge').addEventListener('click', () => { if (state.roleConfig?.nav?.find(n => n.id === 'sprint')) navigate('sprint'); });
+document.getElementById('btnLogout').addEventListener('click', logout);
 
-navigate('dashboard');
+initApp();

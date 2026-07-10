@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 · AgileAI 敏捷管理平台</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    body { overflow: auto; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at 30% 20%, rgba(59,130,246,0.15) 0%, transparent 50%), radial-gradient(ellipse at 70% 80%, rgba(168,85,247,0.1) 0%, transparent 50%), var(--bg); }
+    .login-wrap { width: 100%; max-width: 420px; padding: 1.5rem; }
+    .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 2rem; box-shadow: 0 8px 40px rgba(0,0,0,0.4); }
+    .login-logo { text-align: center; margin-bottom: 1.5rem; }
+    .login-logo .icon { font-size: 2.5rem; }
+    .login-logo h1 { font-size: 1.5rem; margin: 0.5rem 0 0.25rem; background: linear-gradient(135deg, var(--accent), var(--cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .login-logo p { color: var(--muted); font-size: 0.85rem; }
+    .role-hints { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; margin-top: 1.25rem; }
+    .role-hint { text-align: center; padding: 0.6rem 0.4rem; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font-size: 0.72rem; color: var(--muted); cursor: pointer; transition: all 0.15s; }
+    .role-hint:hover { border-color: var(--accent); color: var(--text); }
+    .role-hint strong { display: block; color: var(--text); font-size: 0.78rem; margin-bottom: 0.15rem; }
+    .login-error { color: var(--danger); font-size: 0.82rem; text-align: center; margin-top: 0.75rem; display: none; }
+    .llm-badge { text-align: center; margin-top: 1rem; font-size: 0.75rem; color: var(--muted); }
+    .llm-badge span { color: var(--purple); }
+  </style>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-logo">
+        <div class="icon">⚡</div>
+        <h1>AgileAI</h1>
+        <p>AI 赋能敏捷项目管理平台</p>
+      </div>
+      <form id="loginForm">
+        <div class="form-group">
+          <label>工号</label>
+          <input id="empId" placeholder="请输入工号" autocomplete="username" required>
+        </div>
+        <div class="form-group">
+          <label>密码</label>
+          <input id="password" type="password" placeholder="请输入密码" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;padding:0.65rem;margin-top:0.5rem">登 录</button>
+      </form>
+      <div class="login-error" id="loginError"></div>
+      <div class="role-hints">
+        <div class="role-hint" onclick="fillLogin('666666','aiic@2026')">
+          <strong>超级管理员</strong>admin
+        </div>
+        <div class="role-hint" onclick="fillLogin('600412','600412')">
+          <strong>管理员</strong>曾锐
+        </div>
+        <div class="role-hint" onclick="fillLogin('600785','600785')">
+          <strong>执行人员</strong>赵立泽
+        </div>
+      </div>
+      <div class="llm-badge">🤖 智能引擎: <span id="llmStatus">检测中...</span></div>
+    </div>
+  </div>
+  <script>
+    if (localStorage.getItem('agileai_token')) location.href = '/';
+
+    function fillLogin(id, pw) {
+      document.getElementById('empId').value = id;
+      document.getElementById('password').value = pw;
+    }
+
+    document.getElementById('loginForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const err = document.getElementById('loginError');
+      err.style.display = 'none';
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            emp_id: document.getElementById('empId').value.trim(),
+            password: document.getElementById('password').value,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '登录失败');
+        localStorage.setItem('agileai_token', data.token);
+        localStorage.setItem('agileai_user', JSON.stringify(data.user));
+        localStorage.setItem('agileai_role', JSON.stringify(data.roleConfig));
+        location.href = '/';
+      } catch (ex) {
+        err.textContent = ex.message;
+        err.style.display = 'block';
+      }
+    });
+
+    fetch('/api/auth/roles').catch(() => {});
+    document.getElementById('llmStatus').textContent = '规则模式 + LLM 可选增强';
+  </script>
+</body>
+</html>

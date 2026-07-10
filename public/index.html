@@ -13,33 +13,29 @@
         <span class="logo-icon">⚡</span>
         <span class="logo-text">AgileAI</span>
       </div>
-      <nav class="nav">
-        <button class="nav-item active" data-view="dashboard">📊 仪表盘</button>
-        <button class="nav-item" data-view="kanban">📋 流动看板</button>
-        <button class="nav-item" data-view="backlog">📝 Backlog</button>
-        <button class="nav-item" data-view="sprint">🏃 Sprint</button>
-        <button class="nav-item" data-view="acceptance">✅ 验收中心</button>
-        <button class="nav-item" data-view="ai">🤖 AI 助手</button>
-      </nav>
+      <div class="user-card" id="userCard">
+        <div class="user-avatar" id="userAvatar">?</div>
+        <div class="user-info">
+          <div class="user-name" id="userName">加载中</div>
+          <div class="user-role" id="userRole"></div>
+        </div>
+      </div>
+      <nav class="nav" id="navMenu"></nav>
       <div class="sidebar-footer">
         <div class="sprint-badge" id="activeSprintBadge" style="cursor:pointer" title="点击查看 Sprint">加载中...</div>
+        <button class="btn btn-ghost btn-sm" id="btnLogout" style="width:100%;margin-top:0.5rem">退出登录</button>
       </div>
     </aside>
 
     <main class="main">
       <header class="topbar">
-        <h1 id="pageTitle">仪表盘</h1>
-        <div class="topbar-actions">
-          <button class="btn btn-ghost" id="btnStandup">📋 站会摘要</button>
-          <button class="btn btn-ghost" id="btnRisks">⚠️ 风险扫描</button>
-          <button class="btn btn-primary" id="btnNewItem">+ 新建</button>
-        </div>
+        <h1 id="pageTitle">工作台</h1>
+        <div class="topbar-actions" id="topbarActions"></div>
       </header>
       <div class="content" id="content"></div>
     </main>
   </div>
 
-  <!-- Modal -->
   <div class="modal-overlay" id="modalOverlay">
     <div class="modal" id="modal">
       <div class="modal-header">
@@ -50,7 +46,6 @@
     </div>
   </div>
 
-  <!-- Toast -->
   <div class="toast-container" id="toastContainer"></div>
 
   <script src="/js/app.js"></script>

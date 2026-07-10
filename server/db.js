@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { v4: uuid } = require('uuid');
+const { SEED_USERS, hashPassword } = require('./auth');
 
 const dataDir = path.join(__dirname, '..', 'data');
 const dbFile = path.join(dataDir, 'platform.json');
@@ -9,16 +10,35 @@ if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 function load() {
   if (!fs.existsSync(dbFile)) {
-    return { sprints: [], items: [], activity_log: [], ai_insights: [] };
+    return { users: [], sprints: [], items: [], activity_log: [], ai_insights: [], chat_history: [] };
   }
-  return JSON.parse(fs.readFileSync(dbFile, 'utf8'));
+  const data = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
+  if (!data.users) data.users = [];
+  if (!data.chat_history) data.chat_history = [];
+  return data;
 }
 
 function save(data) {
   fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
 }
 
+function seedUsers(data) {
+  if (data.users.length > 0) return;
+  data.users = SEED_USERS.map(u => ({
+    id: uuid(),
+    emp_id: u.emp_id,
+    name: u.name,
+    password: hashPassword(u.password),
+    role: u.role,
+    dept: u.dept,
+    active: true,
+    created_at: new Date().toISOString(),
+  }));
+  save(data);
+}
+
 function seedIfEmpty(data) {
+  seedUsers(data);
   if (data.items.length > 0) return data;
 
   const sprintId = uuid();
@@ -49,7 +69,8 @@ function seedIfEmpty(data) {
       acceptance_criteria: `Given ${s.title}\nWhen 功能完成\nThen 可通过验收测试`,
       ai_generated: 0, blocked_reason: null, demo_url: null,
       acceptance_status: 'pending', acceptance_feedback: null,
-      assignee: null, parent_id: null,
+      assignee: i === 1 ? '赵立泽' : i === 2 ? '王诗瑶' : null,
+      created_by: '曾锐', parent_id: null,
       created_at: now.toISOString(), updated_at: now.toISOString(), completed_at: s.status === 'done' ? now.toISOString() : null,
     });
   });
@@ -60,7 +81,17 @@ function seedIfEmpty(data) {
     blocked_reason: '等待前端工程师修复触摸事件',
     acceptance_criteria: '', ai_generated: 0, demo_url: null,
     acceptance_status: 'pending', acceptance_feedback: null,
-    assignee: null, parent_id: null,
+    assignee: '万贤书', created_by: '张弛', parent_id: null,
+    created_at: now.toISOString(), updated_at: now.toISOString(), completed_at: null,
+  });
+
+  data.items.push({
+    id: uuid(), type: 'story', title: 'AI 模型接入与智能对话', description: '接入 LLM API 实现智能需求拆分和 AI Copilot',
+    status: 'submitted', priority: 1, story_points: 8, sprint_id: sprintId,
+    acceptance_criteria: 'Given LLM API 配置\nWhen 用户提问\nThen AI 给出专业回答',
+    ai_generated: 0, blocked_reason: null, demo_url: null,
+    acceptance_status: 'pending', acceptance_feedback: null,
+    assignee: null, created_by: '刘紫薇', parent_id: null,
     created_at: now.toISOString(), updated_at: now.toISOString(), completed_at: null,
   });
 
@@ -72,6 +103,20 @@ let _data = seedIfEmpty(load());
 
 const queries = {
   _persist() { save(_data); },
+
+  getUsers() { return _data.users.map(u => ({ ...u, password: undefined })); },
+  getUserById(id) { return _data.users.find(u => u.id === id); },
+  getUserByEmpId(empId) { return _data.users.find(u => u.emp_id === empId); },
+  getUsersRaw() { return _data.users; },
+
+  saveChat(userId, role, content) {
+    _data.chat_history.push({ id: uuid(), user_id: userId, role, content, created_at: new Date().toISOString() });
+    if (_data.chat_history.length > 500) _data.chat_history = _data.chat_history.slice(-500);
+    queries._persist();
+  },
+  getChatHistory(userId, limit = 30) {
+    return _data.chat_history.filter(c => c.user_id === userId).slice(-limit);
+  },
 
   getSprints() { return [..._data.sprints].sort((a, b) => b.start_date.localeCompare(a.start_date)); },
   getSprint(id) { return _data.sprints.find(s => s.id === id); },
@@ -104,6 +149,9 @@ const queries = {
     if (filters.sprint_id) items = items.filter(i => i.sprint_id === filters.sprint_id);
     if (filters.status) items = items.filter(i => i.status === filters.status);
     if (filters.type) items = items.filter(i => i.type === filters.type);
+    if (filters.assignee) items = items.filter(i => i.assignee === filters.assignee);
+    if (filters.created_by) items = items.filter(i => i.created_by === filters.created_by);
+    if (filters.status_in) items = items.filter(i => filters.status_in.includes(i.status));
     return items.sort((a, b) => a.priority - b.priority || b.created_at.localeCompare(a.created_at));
   },
   getItem(id) { return _data.items.find(i => i.id === id); },
@@ -114,6 +162,7 @@ const queries = {
       priority: data.priority ?? 3, story_points: data.story_points ?? 0,
       assignee: data.assignee || null, sprint_id: data.sprint_id || null,
       parent_id: data.parent_id || null, acceptance_criteria: data.acceptance_criteria || '',
+      created_by: data.created_by || null,
       ai_generated: data.ai_generated ? 1 : 0, blocked_reason: data.blocked_reason || null,
       demo_url: data.demo_url || null, acceptance_status: 'pending', acceptance_feedback: null,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(), completed_at: null,
@@ -128,7 +177,7 @@ const queries = {
     if (idx === -1) return null;
     const prev = { ..._data.items[idx] };
     const current = _data.items[idx];
-    const fields = ['title', 'description', 'status', 'priority', 'story_points', 'assignee', 'sprint_id', 'parent_id', 'acceptance_criteria', 'blocked_reason', 'demo_url', 'acceptance_status', 'acceptance_feedback'];
+    const fields = ['title', 'description', 'status', 'priority', 'story_points', 'assignee', 'sprint_id', 'parent_id', 'acceptance_criteria', 'blocked_reason', 'demo_url', 'acceptance_status', 'acceptance_feedback', 'created_by'];
     fields.forEach(f => { if (data[f] !== undefined) current[f] = data[f]; });
     if (data.status === 'done' && !current.completed_at) {
       current.completed_at = new Date().toISOString();
