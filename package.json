@@ -1,7 +1,7 @@
 {
   "name": "ai-agile-platform",
-  "version": "1.0.0",
-  "description": "FDE管理平台 - 流动看板/AI Assistant",
+  "version": "2.0.0",
+  "description": "FDE管理平台 v2 - 任务中心/按角色导航",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",

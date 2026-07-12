@@ -366,6 +366,9 @@ body {
 .workflow-badge strong { color: var(--accent-hover); }
 .workflow-badge--alert { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
 .workflow-badge--alert strong { color: #dc2626; }
+.sidebar-doc-links { display: flex; justify-content: center; gap: 0.65rem; margin-top: 0.35rem; font-size: 0.72rem; }
+.sidebar-doc-links a { color: var(--accent); text-decoration: none; }
+.sidebar-doc-links a:hover { text-decoration: underline; }
 
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 

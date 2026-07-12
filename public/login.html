@@ -165,6 +165,9 @@
       color: #94a3b8;
     }
     .llm-badge span { color: #2563eb; font-weight: 700; }
+    .login-docs { display: flex; justify-content: center; gap: 1rem; margin-top: 0.75rem; font-size: 0.78rem; }
+    .login-docs a { color: #2563eb; text-decoration: none; }
+    .login-docs a:hover { text-decoration: underline; }
     @media (max-width: 480px) {
       .login-card { padding: 1.75rem 1.25rem 1.5rem; }
       .role-hints { grid-template-columns: 1fr; }
@@ -210,16 +213,21 @@
           <div class="role-icon">👔</div>
           <div>
             <strong>审核领导</strong>
-            <span>曾锐 · 审核人员</span>
+            <span>曾锐 · 默认进入任务中心</span>
           </div>
         </div>
         <div class="role-hint" onclick="fillLogin('600785','600785')">
           <div class="role-icon">⚡</div>
           <div>
             <strong>执行人员</strong>
-            <span>赵立泽 · 执行人员</span>
+            <span>赵立泽 · 默认进入今日工作台</span>
           </div>
         </div>
+      </div>
+
+      <div class="login-docs">
+        <a href="/FDE管理平台布局优化方案.html" target="_blank">📐 布局优化方案</a>
+        <a href="/FDE管理平台开发方案.html" target="_blank">📘 开发文档</a>
       </div>
 
       <div class="llm-badge">

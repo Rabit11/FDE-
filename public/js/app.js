@@ -113,8 +113,9 @@ function buildNav() {
 function buildTopbar() {
   const el = document.getElementById('topbarActions');
   if (isReviewerUser()) {
-    el.innerHTML = `<button class="btn btn-ghost" id="btnStandup">📋 站会摘要</button><button class="btn btn-ghost" id="btnRisks">⚠️ 风险扫描</button><button class="btn btn-primary" id="btnNewItem">+ 新建</button>`;
+    el.innerHTML = `<button class="btn btn-ghost" id="btnStandup">📋 站会摘要</button><button class="btn btn-ghost" id="btnRisks">⚠️ 风险扫描</button><button class="btn btn-ghost" id="btnDemand">📤 新建需求</button><button class="btn btn-primary" id="btnNewItem">+ 快捷新建</button>`;
     document.getElementById('btnNewItem')?.addEventListener('click', showNewItemModal);
+    document.getElementById('btnDemand')?.addEventListener('click', () => { state.demandAiTab = 'submit'; navigate('demandai'); });
   } else {
     el.innerHTML = `<button class="btn btn-primary" id="btnNewItem">+ 上报进展</button>`;
     document.getElementById('btnNewItem')?.addEventListener('click', () => navigate('mywork'));
@@ -373,7 +374,7 @@ function exportKanbanList() {
   const stamp = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `流动看板清单_${stamp}.csv`;
+  a.download = `任务中心清单_${stamp}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
   toast(`已导出 ${filtered.length} 条任务`);
@@ -599,7 +600,7 @@ function renderAcceptance() {
   const items = isLeaderUser()
     ? state.items.filter(i => i.status === 'done')
     : state.items.filter(i => i.status === 'done' && i.reviewer === state.user?.name);
-  if (!items.length) return `<div class="empty-state">✅ 当前无已归档任务<br><span style="font-size:0.85rem">执行人员标记任务完成后自动归档，领导可在流动看板或此处退回执行中</span></div>`;
+  if (!items.length) return `<div class="empty-state">✅ 当前无已归档任务<br><span style="font-size:0.85rem">执行人员标记完成后自动归档，领导可在任务中心退回执行中</span></div>`;
   return `
     <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">已归档任务查看。领导可将任务退回执行中。</p>
     ${items.map(i => {
@@ -637,7 +638,7 @@ function renderAI() {
   const showSplit = (state.user?.capabilities || []).includes('reviewer');
   const ai = state.aiStatus || {};
   return `
-    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">管理端 AI 工具：需求拆分、站会摘要、风险扫描。需求提交请使用「需求提交」页面。</p>
+    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">AI 工具：需求拆分、站会摘要、风险扫描、智能对话。新建需求请使用「需求与 AI」页。</p>
     <div class="ai-panel">
       ${showSplit ? `<div class="ai-card">
         <h3>🧠 AI 需求拆分 ${state.llmEnabled ? '<span class="llm-tag">LLM</span>' : ''}</h3>
@@ -868,7 +869,7 @@ function renderReview() {
   };
 
   return `
-    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">领导审核备案：查看任务执行情况，对<strong>执行中</strong>任务终止、<strong>阻塞</strong>任务二次分配、<strong>已归档/已终止</strong>任务退回执行中。</p>
+    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">任务审核视图（已合并至任务中心）：对<strong>执行中</strong>终止、<strong>阻塞</strong>二次分配、<strong>已归档/已终止</strong>退回执行中。</p>
     <div class="section-title">执行中 (${active.length})</div>
     ${active.length ? active.map(i => renderReviewCard(i, 'active')).join('') : '<div class="empty-state">暂无执行中任务</div>'}
     <div class="section-title" style="margin-top:1.5rem">阻塞 (${blocked.length})</div>
@@ -1123,7 +1124,7 @@ function renderProfile() {
 
 function renderTeam() {
   return `
-    <div class="section-title">团队成员 (${state.users.length}) · 可访问个人主页</div>
+    <div class="section-title">团队成员 (${state.users.length})</div>
     <div class="team-grid">
       ${state.users.map(u => {
         const workload = state.items.filter(i => i.assignee === u.name && i.status !== 'done').length;
@@ -1163,7 +1164,7 @@ function renderVoice() {
         <div style="margin-top:1rem;display:flex;gap:0.5rem;justify-content:center;flex-wrap:wrap">
           <button class="btn btn-primary" id="btnRecord" onclick="toggleRecording()">🔴 开始录音</button>
           <label style="font-size:0.82rem;display:flex;align-items:center;gap:0.35rem;color:var(--muted)">
-            <input type="checkbox" id="autoCreateTasks" checked> 自动创建任务到流动看板
+            <input type="checkbox" id="autoCreateTasks" checked> 自动创建任务到任务中心
           </label>
         </div>
         <div id="recordStatus" style="margin-top:0.5rem;font-size:0.82rem;color:var(--danger);display:none"></div>
@@ -1440,7 +1441,7 @@ async function leaderAction(actionFn, successMsg) {
 
 async function moveItem(id, newCategory) {
   if (!isReviewerUser()) {
-    toast('执行人员无权改动流动看板状态，请提交进展后等待领导处理', 'error');
+    toast('执行人员无权改动任务中心状态，请提交进展后等待领导处理', 'error');
     return;
   }
   const col = FLOW_COLS.find(c => c.id === newCategory);
@@ -1639,7 +1640,7 @@ function showItemDetail(id) {
     const body = document.getElementById('modalBody');
     const note = document.createElement('div');
     note.className = 'readonly-note';
-    note.textContent = '执行人员请在「我的工作台」提交进展并标记完成。无权直接改动看板状态，由审核人员统一管理。';
+    note.textContent = '执行人员请在「今日工作台」提交进展并标记完成。无权直接改动任务状态，由审核人员统一管理。';
     body.prepend(note);
     ['eStatus', 'eAssignee', 'ePts', 'eBlocked', 'eCriteria'].forEach(id => {
       const el = document.getElementById(id);
@@ -1655,7 +1656,7 @@ function showItemDetail(id) {
 
 async function updateItem(id) {
   if (!isReviewerUser()) {
-    toast('执行人员无权改动流动看板，请提交进展后等待领导处理', 'error');
+    toast('执行人员无权改动任务中心，请提交进展后等待领导处理', 'error');
     return;
   }
   const category = document.getElementById('eStatus').value;
