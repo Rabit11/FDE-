@@ -70,14 +70,29 @@ function isLeaderUser() {
 function leaderNavConfig(user = state.user) {
   const caps = user?.capabilities || [];
   if (!caps.includes('reviewer') && user?.role !== 'admin') return null;
+  if (user?.role === 'admin') {
+    return {
+      nav: [
+        { id: 'team', label: '👥 团队管理' },
+        { id: 'dashboard', label: '📊 全局看板' },
+        { id: 'taskcenter', label: '📋 任务中心' },
+        { id: 'demandai', label: '🧠 需求与 AI 中心' },
+        { id: 'profile', label: '👤 我的' },
+      ],
+      defaultView: 'team',
+    };
+  }
   const nav = [
     { id: 'dashboard', label: '📊 全局看板' },
     { id: 'taskcenter', label: '📋 任务中心' },
-    { id: 'demandai', label: user?.role === 'admin' ? '🧠 需求与 AI 中心' : '🧠 需求与 AI' },
+    { id: 'demandai', label: '🧠 需求与 AI 中心' },
     { id: 'profile', label: '👤 我的' },
   ];
-  if (user?.role === 'admin') nav.push({ id: 'team', label: '👥 团队' });
   return { nav, defaultView: 'dashboard' };
+}
+
+function isAdminUser() {
+  return state.user?.role === 'admin';
 }
 
 function canModifyKanban() {
@@ -149,11 +164,11 @@ function priorityBadgeHtml(item, { compact = false } = {}) {
   return `<span class="priority-badge ${meta.cls}" title="${meta.label}"><span class="priority-dot ${meta.cls}"></span>${meta.label}</span>`;
 }
 
-function priorityControlHtml(item, { editable = false } = {}) {
+function priorityControlHtml(item, { editable = false, compactSelect = false } = {}) {
   const meta = priorityMeta(item?.priority);
   if (!editable || !canEditTaskPriority(item)) return priorityBadgeHtml(item, { compact: true });
-  return `<select class="priority-select ${meta.cls}" onclick="event.stopPropagation()" onchange="updateTaskPriority('${item.id}', this.value)" title="调整任务优先级">
-    ${PRIORITY_LEVELS.map(l => `<option value="${l.value}" ${meta.value === l.value ? 'selected' : ''}>${l.label}</option>`).join('')}
+  return `<select class="priority-select ${meta.cls}" onclick="event.stopPropagation()" onchange="updateTaskPriority('${item.id}', this.value)" title="${meta.label}">
+    ${PRIORITY_LEVELS.map(l => `<option value="${l.value}" ${meta.value === l.value ? 'selected' : ''}>${compactSelect ? l.short : l.label}</option>`).join('')}
   </select>`;
 }
 
@@ -272,18 +287,21 @@ function closeModal() {
 // ── Renderers ──
 function flowListActionsHtml(item) {
   const parts = [
-    `<button type="button" class="btn btn-ghost btn-sm flow-list-action" onclick="event.stopPropagation();showTaskDetailView('${item.id}')">详情</button>`,
+    `<button type="button" class="btn btn-ghost btn-sm flow-list-action" title="查看详情" onclick="event.stopPropagation();showTaskDetailView('${item.id}')">详</button>`,
   ];
   if (!canModifyKanban()) return `<div class="flow-list-actions">${parts.join('')}</div>`;
   const cat = flowCategory(item);
   if (cat === 'in_progress') {
-    parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--danger" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">终止</button>`);
+    parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--danger" title="终止执行" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">停</button>`);
   }
   if (cat === 'blocked') {
-    parts.push(`<button type="button" class="btn btn-primary btn-sm flow-list-action" onclick="event.stopPropagation();showReassignModal('${item.id}')">分配</button>`);
+    parts.push(`<button type="button" class="btn btn-primary btn-sm flow-list-action" title="二次分配" onclick="event.stopPropagation();showReassignModal('${item.id}')">配</button>`);
   }
   if (cat === 'done' || cat === 'terminated') {
-    parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--warn" onclick="event.stopPropagation();reviewerRevoke('${item.id}')">退回</button>`);
+    parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--warn" title="退回执行中" onclick="event.stopPropagation();reviewerRevoke('${item.id}')">退</button>`);
+  }
+  if (isAdminUser()) {
+    parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--danger" title="删除任务" onclick="event.stopPropagation();deleteItemQuick('${item.id}')">删</button>`);
   }
   return `<div class="flow-list-actions">${parts.join('')}</div>`;
 }
@@ -421,37 +439,69 @@ function setKanbanViewMode(mode) {
   refreshKanbanContent();
 }
 
+function renderPeopleCompactCell({ proposer, reviewer, assignee, assistants }) {
+  const assist = (assistants || []).length ? (assistants || []).map(esc).join('、') : '';
+  return `<td class="task-col-people">
+    <div class="people-stack">
+      <div><span class="people-tag">提</span>${esc(proposer || '-')}</div>
+      <div><span class="people-tag">审</span>${esc(reviewer || '-')}</div>
+      <div><span class="people-tag">主</span>${esc(assignee || '-')}<span class="people-sub">${assist ? ` · 协 ${assist}` : ''}</span></div>
+    </div>
+  </td>`;
+}
+
+function renderTimeRangeCell(start, end) {
+  return `<td class="task-col-time">
+    <div class="time-range">
+      <span>${fmtTime(start) || '-'}</span>
+      <span class="time-range-sep">→</span>
+      <span>${end ? fmtTime(end) : '—'}</span>
+    </div>
+  </td>`;
+}
+
+function taskTableColgroupCenter() {
+  return `<colgroup>
+    <col class="task-col-w-no"><col class="task-col-w-title"><col class="task-col-w-status"><col class="task-col-w-priority">
+    <col class="task-col-w-person"><col class="task-col-w-person"><col class="task-col-w-person"><col class="task-col-w-person">
+    <col class="task-col-w-time"><col class="task-col-w-time"><col class="task-col-w-action">
+  </colgroup>`;
+}
+
+function taskTableColgroupProfile() {
+  return `<colgroup>
+    <col class="task-col-w-no"><col class="task-col-w-title"><col class="task-col-w-status"><col class="task-col-w-priority">
+    <col class="task-col-w-people"><col class="task-col-w-time-range"><col class="task-col-w-action">
+  </colgroup>`;
+}
+
 function renderKanbanListRow(item) {
   const meta = projectStatusMeta(item);
   const assist = (item.assistants || []).length ? item.assistants.map(esc).join('、') : '-';
   return `<tr class="flow-list-row" onclick="showTaskDetailView('${item.id}')">
-    <td class="flow-list-cell flow-list-col-no">${item.req_no ? `<span class="req-no-tag req-no-tag--sm">${esc(item.req_no)}</span>` : '<span class="flow-list-empty">-</span>'}</td>
-    <td class="flow-list-title" title="${esc(item.title)}">${esc(item.title)}</td>
-    <td class="flow-list-cell flow-list-col-status"><span class="project-status-pill project-status-pill--sm ${meta.cls}">${meta.label}</span></td>
-    <td class="flow-list-cell flow-list-col-priority" onclick="event.stopPropagation()">${priorityControlHtml(item, { editable: canEditTaskPriority(item) })}</td>
-    <td class="flow-list-cell flow-list-col-person">${esc(item.created_by || '-')}</td>
-    <td class="flow-list-cell flow-list-col-person">${esc(item.reviewer || '-')}</td>
-    <td class="flow-list-cell flow-list-col-person">${esc(item.assignee || '-')}</td>
-    <td class="flow-list-cell flow-list-col-person" title="${esc(assist)}">${assist}</td>
-    <td class="flow-list-cell flow-list-time">${fmtTime(item.created_at) || '-'}</td>
-    <td class="flow-list-cell flow-list-time">${fmtTime(item.updated_at) || '-'}</td>
-    <td class="flow-list-action-cell" onclick="event.stopPropagation()">${flowListActionsHtml(item)}</td>
+    <td class="task-col-no">${item.req_no ? `<span class="req-no-tag req-no-tag--sm">${esc(item.req_no)}</span>` : '<span class="flow-list-empty">-</span>'}</td>
+    <td class="task-col-title" title="${esc(item.title)}"><span class="cell-title-text">${esc(item.title)}</span></td>
+    <td class="task-col-status"><span class="project-status-pill project-status-pill--sm ${meta.cls}">${meta.label}</span></td>
+    <td class="task-col-priority" onclick="event.stopPropagation()">${priorityControlHtml(item, { editable: canEditTaskPriority(item), compactSelect: true })}</td>
+    <td class="task-col-person" title="需求提出人：${esc(item.created_by || '-')}">${esc(item.created_by || '-')}</td>
+    <td class="task-col-person" title="审核人：${esc(item.reviewer || '-')}">${esc(item.reviewer || '-')}</td>
+    <td class="task-col-person" title="主执行人：${esc(item.assignee || '-')}">${esc(item.assignee || '-')}</td>
+    <td class="task-col-person" title="协助人：${esc(assist)}">${assist}</td>
+    <td class="task-col-time" title="开始时间">${fmtTime(item.created_at) || '-'}</td>
+    <td class="task-col-time" title="最近更新">${fmtTime(item.updated_at) || '-'}</td>
+    <td class="task-col-action" onclick="event.stopPropagation()">${flowListActionsHtml(item)}</td>
   </tr>`;
 }
 
 function renderKanbanListHtml(items) {
   if (!items.length) return '<div class="empty-state" style="padding:2rem">暂无符合条件的任务</div>';
   return `<div class="project-table-wrap flow-list-wrap">
-    <table class="project-table flow-list-table">
-      <colgroup>
-        <col class="flow-list-w-no"><col class="flow-list-w-title"><col class="flow-list-w-status"><col class="flow-list-w-priority">
-        <col class="flow-list-w-person"><col class="flow-list-w-person"><col class="flow-list-w-person"><col class="flow-list-w-person">
-        <col class="flow-list-w-time"><col class="flow-list-w-time"><col class="flow-list-w-action">
-      </colgroup>
+    <table class="project-table task-table flow-list-table">
+      ${taskTableColgroupCenter()}
       <thead><tr>
-        <th>编号</th><th>任务名称</th><th>状态</th><th>优先级</th>
-        <th>提出人</th><th>审核人</th><th>主执行</th><th>协助人</th>
-        <th>开始</th><th>更新</th><th>操作</th>
+        <th>编号</th><th>任务名称</th><th>状态</th><th title="优先级">优先</th>
+        <th title="需求提出人">提出</th><th title="审核人">审核</th><th title="主执行人">主执行</th><th title="其他执行人">协助</th>
+        <th title="开始时间">开始</th><th title="最近更新">更新</th><th>操作</th>
       </tr></thead>
       <tbody>${items.map(renderKanbanListRow).join('')}</tbody>
     </table>
@@ -1723,20 +1773,15 @@ function profileProjectStatusMeta(row = {}) {
 
 function renderProfileProjectRow(pr) {
   const meta = profileProjectStatusMeta(pr);
-  const assist = (pr.assistants || []).length ? pr.assistants.map(esc).join('、') : '-';
   const end = taskEndTime(pr);
   return `<tr class="profile-task-row" onclick="showTaskDetailView('${pr.item_id}')">
-    <td>${pr.task_no !== '-' ? `<span class="req-no-tag">${esc(pr.task_no)}</span>` : '<span class="flow-list-empty">-</span>'}</td>
-    <td class="flow-list-title"><strong>${esc(pr.task_name)}</strong></td>
-    <td><span class="project-status-pill ${meta.cls}">${meta.label}</span></td>
-    <td>${priorityBadgeHtml({ priority: pr.priority }, { compact: true })}</td>
-    <td>${esc(pr.proposer)}</td>
-    <td>${esc(pr.reviewer)}</td>
-    <td>${esc(pr.assignee)}</td>
-    <td>${assist}</td>
-    <td class="flow-list-time">${fmtTime(pr.created_at) || '-'}</td>
-    <td class="flow-list-time">${end ? fmtTime(end) : '-'}</td>
-    <td class="profile-task-actions" onclick="event.stopPropagation()">
+    <td class="task-col-no">${pr.task_no !== '-' ? `<span class="req-no-tag req-no-tag--sm">${esc(pr.task_no)}</span>` : '<span class="flow-list-empty">-</span>'}</td>
+    <td class="task-col-title" title="${esc(pr.task_name)}"><span class="cell-title-text">${esc(pr.task_name)}</span></td>
+    <td class="task-col-status"><span class="project-status-pill project-status-pill--sm ${meta.cls}">${meta.label}</span></td>
+    <td class="task-col-priority">${priorityBadgeHtml({ priority: pr.priority }, { compact: true })}</td>
+    ${renderPeopleCompactCell({ proposer: pr.proposer, reviewer: pr.reviewer, assignee: pr.assignee, assistants: pr.assistants })}
+    ${renderTimeRangeCell(pr.created_at, end)}
+    <td class="task-col-action profile-task-actions" onclick="event.stopPropagation()">
       <button type="button" class="btn btn-ghost btn-sm profile-task-btn" onclick="showTaskDetailView('${pr.item_id}')">查看</button>
       <button type="button" class="btn btn-ghost btn-sm profile-task-btn" onclick="downloadTaskDetail('${pr.item_id}')">下载</button>
     </td>
@@ -1758,14 +1803,14 @@ function renderProfileProjectTable(projects, { title, exportKind, emptyText, lim
       </div>
     </div>
     <div class="project-table-wrap">
-      <table class="project-table profile-task-table">
+      <table class="project-table task-table profile-task-table">
+        ${taskTableColgroupProfile()}
         <thead><tr>
-          <th>任务编号</th><th>任务名称</th><th>状态</th><th>优先级</th>
-          <th>需求提出人</th><th>审核人</th><th>主执行人</th><th>其他执行人</th>
-          <th>开始时间</th><th>结束时间</th><th>操作</th>
+          <th>编号</th><th>任务名称</th><th>状态</th><th>优先级</th>
+          <th>相关人员</th><th>起止时间</th><th>操作</th>
         </tr></thead>
         <tbody>
-          ${count ? rows.map(renderProfileProjectRow).join('') : `<tr><td colspan="11" class="profile-task-empty">${emptyText}</td></tr>`}
+          ${count ? rows.map(renderProfileProjectRow).join('') : `<tr><td colspan="7" class="profile-task-empty">${emptyText}</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1959,7 +2004,8 @@ function renderProfile() {
 }
 
 function renderTeam() {
-  return `
+  if (!isAdminUser()) {
+    return `
     <div class="section-title">团队成员 (${state.users.length})</div>
     <div class="team-grid">
       ${state.users.map(u => {
@@ -1974,6 +2020,79 @@ function renderTeam() {
         </div>`;
       }).join('')}
     </div>`;
+  }
+
+  const activeUsers = state.users.filter(u => u.active !== false);
+  const adminUser = activeUsers.find(u => u.role === 'admin');
+  const managedUsers = activeUsers.filter(u => u.role !== 'admin');
+  const allTasks = sortByPriority([...state.items]);
+
+  const userRows = managedUsers.map(u => {
+    const workload = state.items.filter(i => i.assignee === u.name && !['done', 'terminated'].includes(i.status)).length;
+    const isReviewer = (u.capabilities || []).includes('reviewer');
+    const isExecutor = (u.capabilities || []).includes('executor');
+    return `<tr>
+      <td><strong>${esc(u.name)}</strong></td>
+      <td>${esc(u.emp_id)}</td>
+      <td>${isReviewer ? '<span class="team-cap team-cap--review">审核人</span>' : '<span class="team-cap team-cap--off">-</span>'}</td>
+      <td>${isExecutor ? '<span class="team-cap team-cap--exec">执行人</span>' : '<span class="team-cap team-cap--off">-</span>'}</td>
+      <td>${workload}</td>
+      <td class="task-col-action team-admin-actions">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="showEditUserModal('${u.id}')">权限</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="viewProfile('${u.id}')">档案</button>
+        <button type="button" class="btn btn-ghost btn-sm flow-list-action--danger" onclick="removeUser('${u.id}')">删除</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const taskRows = allTasks.slice(0, 50).map(item => {
+    const meta = projectStatusMeta(item);
+    return `<tr class="profile-task-row" onclick="showTaskDetailView('${item.id}')" style="cursor:pointer">
+      <td class="task-col-no">${item.req_no ? `<span class="req-no-tag req-no-tag--sm">${esc(item.req_no)}</span>` : '-'}</td>
+      <td class="task-col-title" title="${esc(item.title)}"><span class="cell-title-text">${esc(item.title)}</span></td>
+      <td class="task-col-status"><span class="project-status-pill project-status-pill--sm ${meta.cls}">${meta.label}</span></td>
+      <td class="task-col-person">${esc(item.assignee || '-')}</td>
+      <td class="task-col-action team-admin-actions" onclick="event.stopPropagation()">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="showTaskDetailView('${item.id}')">详情</button>
+        <button type="button" class="btn btn-ghost btn-sm flow-list-action--danger" onclick="deleteItemQuick('${item.id}')">删除</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="team-admin-hero card">
+      <div>
+        <h2>👥 团队管理</h2>
+        <p>添加人员、分配审核人/执行人权限，管理全部任务（含删除）。</p>
+      </div>
+      <button type="button" class="btn btn-primary" onclick="showAddUserModal()">+ 添加人员</button>
+    </div>
+
+    <div class="section-title">人员列表 (${managedUsers.length})</div>
+    <div class="project-table-wrap">
+      <table class="project-table task-table team-admin-table team-admin-table--users">
+        <thead><tr>
+          <th>姓名</th><th>工号</th><th>审核人</th><th>执行人</th><th>进行中</th><th>操作</th>
+        </tr></thead>
+        <tbody>${userRows || '<tr><td colspan="6" class="profile-task-empty">暂无成员，点击右上角添加</td></tr>'}</tbody>
+      </table>
+    </div>
+    ${adminUser ? `<p class="team-admin-note">超级管理员 <strong>${esc(adminUser.name)}</strong>（工号 ${esc(adminUser.emp_id)}）拥有全部权限，不在此列表中修改。</p>` : ''}
+
+    <div class="section-title" style="margin-top:1.5rem">任务管理 (${allTasks.length})</div>
+    <p class="team-admin-note">超级管理员可删除任意任务，操作不可恢复。</p>
+    <div class="project-table-wrap">
+      <table class="project-table task-table team-admin-table team-admin-table--tasks">
+        <colgroup>
+          <col class="task-col-w-no"><col class="task-col-w-title"><col class="task-col-w-status"><col class="task-col-w-person"><col class="task-col-w-action">
+        </colgroup>
+        <thead><tr>
+          <th>编号</th><th>标题</th><th>状态</th><th>主执行</th><th>操作</th>
+        </tr></thead>
+        <tbody>${taskRows || '<tr><td colspan="5" class="profile-task-empty">暂无任务</td></tr>'}</tbody>
+      </table>
+    </div>
+    ${allTasks.length > 50 ? `<p class="team-admin-note">仅展示前 50 项，完整列表请前往任务中心。</p>` : ''}`;
 }
 
 function renderVoice() {
@@ -2224,7 +2343,7 @@ async function navigate(view) {
   const titles = {
     taskcenter: '任务中心', dashboard: isReviewerUser() ? '全局看板' : '仪表盘',
     demandai: '需求与 AI', mywork: '今日工作台', submit: '提交需求',
-    profile: isReviewerUser() ? '我的' : '我的记录', team: '团队',
+    profile: isReviewerUser() ? '我的' : '我的记录', team: isAdminUser() ? '团队管理' : '团队',
     kanban: '任务中心', review: '任务中心', acceptance: '任务中心', ai: '需求与 AI',
   };
   document.getElementById('pageTitle').textContent = titles[view] || view;
@@ -2925,6 +3044,104 @@ async function deleteItem(id) {
   closeModal();
   toast('任务已删除');
   await reloadViewAfterMutation();
+}
+
+async function deleteItemQuick(id) {
+  const item = state.items.find(i => i.id === id);
+  if (!item) return toast('任务不存在', 'error');
+  if (!confirm(`确定删除任务「${item.title}」？此操作不可恢复。`)) return;
+  await api(`/items/${id}`, { method: 'DELETE' });
+  toast('任务已删除');
+  await reloadViewAfterMutation();
+}
+
+function showAddUserModal() {
+  showModal('添加人员', `
+    <div class="form-group"><label>姓名 *</label><input id="nuName" placeholder="真实姓名"></div>
+    <div class="form-group"><label>工号 *</label><input id="nuEmpId" placeholder="登录工号"></div>
+    <div class="form-group"><label>初始密码</label><input id="nuPassword" placeholder="默认同工号"></div>
+    <div class="form-group"><label>权限 *</label>
+      <div class="team-cap-checks">
+        <label><input type="checkbox" id="nuReviewer"> 审核人</label>
+        <label><input type="checkbox" id="nuExecutor" checked> 执行人</label>
+      </div>
+      <p class="team-admin-note">至少选择一项；默认同时具备需求提出权限。</p>
+    </div>
+    <button class="btn btn-primary" style="width:100%" onclick="createUser()">确认添加</button>
+  `);
+}
+
+function showEditUserModal(userId) {
+  const u = state.users.find(x => x.id === userId);
+  if (!u) return toast('用户不存在', 'error');
+  const isReviewer = (u.capabilities || []).includes('reviewer');
+  const isExecutor = (u.capabilities || []).includes('executor');
+  showModal(`编辑权限 · ${esc(u.name)}`, `
+    <div class="form-group"><label>姓名</label><input id="euName" value="${esc(u.name)}"></div>
+    <div class="form-group"><label>工号</label><input id="euEmpId" value="${esc(u.emp_id)}"></div>
+    <div class="form-group"><label>重置密码</label><input id="euPassword" type="password" placeholder="留空则不修改"></div>
+    <div class="form-group"><label>权限</label>
+      <div class="team-cap-checks">
+        <label><input type="checkbox" id="euReviewer" ${isReviewer ? 'checked' : ''}> 审核人</label>
+        <label><input type="checkbox" id="euExecutor" ${isExecutor ? 'checked' : ''}> 执行人</label>
+      </div>
+    </div>
+    <button class="btn btn-primary" style="width:100%" onclick="saveUserRole('${u.id}')">保存</button>
+  `);
+}
+
+async function createUser() {
+  const name = document.getElementById('nuName')?.value?.trim();
+  const emp_id = document.getElementById('nuEmpId')?.value?.trim();
+  const password = document.getElementById('nuPassword')?.value?.trim();
+  const reviewer = document.getElementById('nuReviewer')?.checked;
+  const executor = document.getElementById('nuExecutor')?.checked;
+  if (!name || !emp_id) return toast('请填写姓名和工号', 'error');
+  if (!reviewer && !executor) return toast('至少选择审核人或执行人', 'error');
+  try {
+    const user = await api('/users', { method: 'POST', body: { name, emp_id, password, reviewer, executor } });
+    closeModal();
+    toast(`已添加 ${user.name}`);
+    state.users = normalizeUsers(await api('/users'));
+    await navigate('team');
+  } catch (e) {
+    toast(e.message || '添加失败', 'error');
+  }
+}
+
+async function saveUserRole(userId) {
+  const name = document.getElementById('euName')?.value?.trim();
+  const emp_id = document.getElementById('euEmpId')?.value?.trim();
+  const password = document.getElementById('euPassword')?.value?.trim();
+  const reviewer = document.getElementById('euReviewer')?.checked;
+  const executor = document.getElementById('euExecutor')?.checked;
+  if (!name || !emp_id) return toast('请填写姓名和工号', 'error');
+  if (!reviewer && !executor) return toast('至少选择审核人或执行人', 'error');
+  try {
+    const body = { name, emp_id, reviewer, executor };
+    if (password) body.password = password;
+    const user = await api(`/users/${userId}/role`, { method: 'PATCH', body });
+    closeModal();
+    toast(`已更新 ${user.name} 的权限`);
+    state.users = normalizeUsers(await api('/users'));
+    await navigate('team');
+  } catch (e) {
+    toast(e.message || '保存失败', 'error');
+  }
+}
+
+async function removeUser(userId) {
+  const u = state.users.find(x => x.id === userId);
+  if (!u) return;
+  if (!confirm(`确定删除人员「${u.name}」？删除后将无法登录，历史任务数据保留。`)) return;
+  try {
+    await api(`/users/${userId}`, { method: 'DELETE' });
+    toast(`已删除 ${u.name}`);
+    state.users = normalizeUsers(await api('/users'));
+    await navigate('team');
+  } catch (e) {
+    toast(e.message || '删除失败', 'error');
+  }
 }
 
 async function viewProfile(userId) {

@@ -51,8 +51,9 @@ function createToken() {
 }
 
 function getDefaultView(user) {
+  if (user.role === 'admin') return 'team';
   const caps = user.capabilities || [];
-  if (caps.includes('reviewer') || user.role === 'admin') return 'dashboard';
+  if (caps.includes('reviewer')) return 'dashboard';
   if (caps.includes('executor')) return 'mywork';
   if (caps.includes('proposer')) return 'submit';
   return 'profile';
@@ -64,6 +65,14 @@ function getNavForUser(user) {
   const isReviewer = caps.includes('reviewer') || user.role === 'admin';
 
   if (isReviewer) {
+    if (user.role === 'admin') {
+      nav.push({ id: 'team', label: '👥 团队管理' });
+      nav.push({ id: 'dashboard', label: '📊 全局看板' });
+      nav.push({ id: 'taskcenter', label: '📋 任务中心' });
+      nav.push({ id: 'demandai', label: '🧠 需求与 AI 中心' });
+      nav.push({ id: 'profile', label: '👤 我的' });
+      return nav;
+    }
     nav.push({ id: 'dashboard', label: '📊 全局看板' });
     nav.push({ id: 'taskcenter', label: '📋 任务中心' });
     nav.push({ id: 'demandai', label: user.role === 'admin' ? '🧠 需求与 AI 中心' : '🧠 需求与 AI' });

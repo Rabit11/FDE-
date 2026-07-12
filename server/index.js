@@ -200,12 +200,52 @@ app.use('/api', (req, res, next) => {
 });
 
 // ── Users / Team / Profile ──
-app.get('/api/users', (req, res) => res.json(queries.getUsers()));
+app.get('/api/users', (req, res) => {
+  const users = queries.getUsers();
+  if (req.user.role !== 'admin') {
+    return res.json(users.filter(u => u.active !== false));
+  }
+  res.json(users.filter(u => u.active !== false));
+});
+app.post('/api/users', (req, res) => {
+  if (req.user.role !== 'admin' && !req.user.can_manage_users) {
+    return res.status(403).json({ error: '仅超级管理员可添加人员' });
+  }
+  const { emp_id, name, password, reviewer, executor } = req.body;
+  if (!emp_id?.trim() || !name?.trim()) {
+    return res.status(400).json({ error: '工号和姓名不能为空' });
+  }
+  const result = queries.createUser({
+    emp_id: emp_id.trim(),
+    name: name.trim(),
+    password: password?.trim() || emp_id.trim(),
+    reviewer: !!reviewer,
+    executor: !!executor,
+  });
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.status(201).json(result);
+});
+app.patch('/api/users/:id/role', (req, res) => {
+  if (req.user.role !== 'admin' && !req.user.can_manage_users) {
+    return res.status(403).json({ error: '仅超级管理员可修改人员权限' });
+  }
+  const result = queries.updateManagedUser(req.params.id, req.body);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json(result);
+});
+app.delete('/api/users/:id', (req, res) => {
+  if (req.user.role !== 'admin' && !req.user.can_manage_users) {
+    return res.status(403).json({ error: '仅超级管理员可删除人员' });
+  }
+  const result = queries.deactivateUser(req.params.id, req.user.id);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json(result);
+});
 app.get('/api/users/reviewers/list', (req, res) => {
-  res.json(queries.getUsers().filter(u => (u.capabilities || []).includes('reviewer')));
+  res.json(queries.getUsers().filter(u => u.active !== false && (u.capabilities || []).includes('reviewer')));
 });
 app.get('/api/users/executors/list', (req, res) => {
-  res.json(queries.getUsers().filter(u =>
+  res.json(queries.getUsers().filter(u => u.active !== false &&
     (u.capabilities || []).includes('executor') && !(u.capabilities || []).includes('reviewer')
   ));
 });

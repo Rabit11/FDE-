@@ -202,6 +202,89 @@ const queries = {
     return safe;
   },
 
+  buildCapabilities({ reviewer, executor }) {
+    const caps = ['proposer'];
+    if (reviewer) caps.push('reviewer');
+    if (executor) caps.push('executor');
+    return caps;
+  },
+
+  resolveUserMeta(caps) {
+    const hasReviewer = caps.includes('reviewer');
+    const hasExecutor = caps.includes('executor');
+    return {
+      capabilities: caps,
+      dept: hasReviewer ? '审核人' : '执行人',
+      role: hasReviewer ? 'manager' : 'member',
+    };
+  },
+
+  createUser(data) {
+    if (_data.users.some(u => u.emp_id === data.emp_id)) return { error: '工号已存在' };
+    if (_data.users.some(u => u.name === data.name)) return { error: '姓名已存在' };
+    const reviewer = !!data.reviewer;
+    const executor = !!data.executor;
+    if (!reviewer && !executor) return { error: '至少选择审核人或执行人' };
+    const caps = queries.buildCapabilities({ reviewer, executor });
+    const meta = queries.resolveUserMeta(caps);
+    const user = {
+      id: uuid(),
+      emp_id: data.emp_id,
+      name: data.name,
+      password: hashPassword(data.password || data.emp_id),
+      role: meta.role,
+      dept: meta.dept,
+      capabilities: meta.capabilities,
+      can_manage_users: false,
+      can_view_profiles: true,
+      profile: { bio: '', skills: [], availability: 'available', max_wip: 4, project_history: [] },
+      active: true,
+      created_at: new Date().toISOString(),
+    };
+    _data.users.push(user);
+    queries._persist();
+    const { password, ...safe } = user;
+    return safe;
+  },
+
+  updateManagedUser(id, data) {
+    const u = _data.users.find(x => x.id === id);
+    if (!u) return { error: '用户不存在' };
+    if (u.role === 'admin') return { error: '不能修改超级管理员' };
+    if (data.name && data.name !== u.name && _data.users.some(x => x.name === data.name && x.id !== id)) {
+      return { error: '姓名已存在' };
+    }
+    if (data.emp_id && data.emp_id !== u.emp_id && _data.users.some(x => x.emp_id === data.emp_id && x.id !== id)) {
+      return { error: '工号已存在' };
+    }
+    if (data.name) u.name = data.name;
+    if (data.emp_id) u.emp_id = data.emp_id;
+    if (data.password) u.password = hashPassword(data.password);
+    if (data.reviewer !== undefined || data.executor !== undefined) {
+      const reviewer = data.reviewer !== undefined ? !!data.reviewer : (u.capabilities || []).includes('reviewer');
+      const executor = data.executor !== undefined ? !!data.executor : (u.capabilities || []).includes('executor');
+      if (!reviewer && !executor) return { error: '至少选择审核人或执行人' };
+      const caps = queries.buildCapabilities({ reviewer, executor });
+      const meta = queries.resolveUserMeta(caps);
+      u.capabilities = meta.capabilities;
+      u.dept = meta.dept;
+      u.role = meta.role;
+    }
+    queries._persist();
+    const { password, ...safe } = u;
+    return safe;
+  },
+
+  deactivateUser(id, actorId) {
+    const u = _data.users.find(x => x.id === id);
+    if (!u) return { error: '用户不存在' };
+    if (u.role === 'admin') return { error: '不能删除超级管理员' };
+    if (u.id === actorId) return { error: '不能删除当前登录账号' };
+    u.active = false;
+    queries._persist();
+    return { ok: true };
+  },
+
   saveChat(userId, role, content) {
     _data.chat_history.push({ id: uuid(), user_id: userId, role, content, created_at: new Date().toISOString() });
     if (_data.chat_history.length > 500) _data.chat_history = _data.chat_history.slice(-500);
