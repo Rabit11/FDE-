@@ -9,15 +9,13 @@ const CAPABILITIES = {
 const LEADER_NAMES = ['曾锐', '林宇飞', '毛研勋', '张弛'];
 
 const NAV_ITEMS = {
-  dashboard: { id: 'dashboard', label: '📊 仪表盘', caps: ['reviewer'], roles: ['admin'] },
-  mywork: { id: 'mywork', label: '💼 我的工作台', caps: ['executor'], roles: [] },
-  profile: { id: 'profile', label: '👤 个人主页', caps: [], roles: [] },
-  kanban: { id: 'kanban', label: '📋 流动看板', caps: ['executor', 'reviewer'], roles: [] },
-  review: { id: 'review', label: '🔍 审核备案', caps: ['reviewer'], roles: ['admin', 'manager'] },
-  acceptance: { id: 'acceptance', label: '📦 归档查看', caps: ['reviewer'], roles: ['admin', 'manager'] },
-  submit: { id: 'submit', label: '📤 需求提交', caps: ['proposer'], roles: [] },
-  ai: { id: 'ai', label: '🤖 AI 助手', caps: ['reviewer'], roles: ['admin', 'manager'] },
-  team: { id: 'team', label: '👥 团队管理', caps: [], roles: ['admin'] },
+  taskcenter: { id: 'taskcenter', label: '📋 任务中心', caps: ['reviewer'], roles: ['admin', 'manager'] },
+  dashboard: { id: 'dashboard', label: '📊 概览', caps: ['reviewer'], roles: ['admin'] },
+  demandai: { id: 'demandai', label: '🧠 需求与 AI', caps: ['reviewer'], roles: ['admin', 'manager'] },
+  mywork: { id: 'mywork', label: '💼 今日工作台', caps: ['executor'], roles: [] },
+  submit: { id: 'submit', label: '📤 提交需求', caps: ['proposer'], roles: [] },
+  profile: { id: 'profile', label: '👤 我的', caps: [], roles: [] },
+  team: { id: 'team', label: '👥 团队', caps: [], roles: ['admin'] },
 };
 
 const SEED_USERS = [
@@ -46,42 +44,37 @@ function createToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function getDefaultView(user) {
+  const caps = user.capabilities || [];
+  if (caps.includes('reviewer') || user.role === 'admin') return 'taskcenter';
+  if (caps.includes('executor')) return 'mywork';
+  if (caps.includes('proposer')) return 'submit';
+  return 'profile';
+}
+
 function getNavForUser(user) {
   const caps = user.capabilities || [];
-  const seen = new Set();
   const nav = [];
+  const isReviewer = caps.includes('reviewer') || user.role === 'admin';
 
-  Object.values(NAV_ITEMS).forEach(item => {
-    if (item.id === 'ai' && caps.includes('proposer')) return;
-    const allowed = item.roles.includes(user.role) ||
-      item.caps.some(c => caps.includes(c)) ||
-      (item.id === 'profile') ||
-      (item.id === 'kanban' && caps.length > 0);
-    if (allowed && !seen.has(item.id)) {
-      seen.add(item.id);
-      if (item.id === 'dashboard' && !caps.includes('reviewer') && user.role !== 'admin') return;
-      if (item.id === 'dashboard' && user.role === 'admin') nav.push({ ...item, label: '📊 全局管理看板' });
-      else if (item.id === 'dashboard' && caps.includes('reviewer')) nav.push({ ...item, label: '📊 管理看板' });
-      else if (item.id === 'dashboard') nav.push({ ...item, label: '📊 仪表盘' });
-      else if (item.id === 'ai' && user.role === 'admin') nav.push({ ...item, label: '🤖 AI 指挥中心' });
-      else nav.push(item);
-    }
-  });
+  if (isReviewer) {
+    nav.push({ id: 'taskcenter', label: '📋 任务中心' });
+    nav.push({ id: 'dashboard', label: user.role === 'admin' ? '📊 全局概览' : '📊 概览' });
+    nav.push({ id: 'demandai', label: user.role === 'admin' ? '🧠 需求与 AI 中心' : '🧠 需求与 AI' });
+    nav.push({ id: 'profile', label: '👤 我的' });
+    if (user.role === 'admin') nav.push({ id: 'team', label: '👥 团队' });
+    return nav;
+  }
 
-  if (!caps.includes('reviewer') && caps.includes('executor')) {
-    return nav.sort((a, b) => {
-      const order = ['mywork', 'profile', 'submit', 'kanban'];
-      return order.indexOf(a.id) - order.indexOf(b.id);
-    });
+  if (caps.includes('executor')) {
+    nav.push({ id: 'mywork', label: '💼 今日工作台' });
+    if (caps.includes('proposer')) nav.push({ id: 'submit', label: '📤 提交需求' });
+    nav.push({ id: 'profile', label: '👤 我的记录' });
+    return nav;
   }
-  if (caps.includes('reviewer') || user.role === 'admin') {
-    const order = ['dashboard', 'kanban', 'review', 'acceptance', 'submit', 'ai', 'team', 'mywork', 'profile'];
-    return nav.sort((a, b) => {
-      const ai = order.indexOf(a.id);
-      const bi = order.indexOf(b.id);
-      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-    });
-  }
+
+  if (caps.includes('proposer')) nav.push({ id: 'submit', label: '📤 提交需求' });
+  nav.push({ id: 'profile', label: '👤 我的' });
   return nav;
 }
 
@@ -105,6 +98,7 @@ function sanitizeUser(user) {
     ...safe,
     roleLabel: getRoleLabel(user),
     nav: getNavForUser(user),
+    defaultView: getDefaultView(user),
     capabilityLabels: (user.capabilities || []).map(c => CAPABILITIES[c]?.label || c),
   };
 }
@@ -115,7 +109,11 @@ function login(empId, password, users) {
   const token = createToken();
   sessions.set(token, { userId: user.id, createdAt: Date.now() });
   const safe = sanitizeUser(user);
-  return { token, user: safe, roleConfig: { label: safe.roleLabel, nav: safe.nav, capabilities: user.capabilities } };
+  return {
+    token,
+    user: safe,
+    roleConfig: { label: safe.roleLabel, nav: safe.nav, capabilities: user.capabilities, defaultView: safe.defaultView },
+  };
 }
 
 function logout(token) { sessions.delete(token); }
@@ -165,5 +163,5 @@ function requirePermission(...perms) {
 
 module.exports = {
   CAPABILITIES, NAV_ITEMS, SEED_USERS, LEADER_NAMES, hashPassword, login, logout, getSessionUser,
-  hasPermission, authMiddleware, requirePermission, sanitizeUser, getNavForUser, getRoleLabel, isLeader,
+  hasPermission, authMiddleware, requirePermission, sanitizeUser, getNavForUser, getRoleLabel, getDefaultView, isLeader,
 };

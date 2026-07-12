@@ -24,7 +24,7 @@ function flowCategory(item) {
   return 'in_progress';
 }
 
-let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'list' };
+let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], userReviewProjects: [], currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'list', demandAiTab: 'submit', submitTab: 'quick', profileShowAll: false };
 
 function getToken() { return localStorage.getItem('agileai_token'); }
 
@@ -100,6 +100,7 @@ function updateWorkflowBadge() {
   const done = state.items.filter(i => flowCategory(i) === 'done').length;
   const terminated = state.items.filter(i => flowCategory(i) === 'terminated').length;
   el.innerHTML = `执行中 <strong>${running}</strong> · 阻塞 <strong>${blocked}</strong> · 已归档 <strong>${done}</strong> · 已终止 <strong>${terminated}</strong>`;
+  el.className = blocked && isReviewerUser() ? 'workflow-badge workflow-badge--alert' : 'workflow-badge';
 }
 
 function buildNav() {
@@ -111,13 +112,13 @@ function buildNav() {
 
 function buildTopbar() {
   const el = document.getElementById('topbarActions');
-  const role = state.user?.role;
-  if (role === 'member' || !(state.user?.capabilities || []).includes('reviewer')) {
-    el.innerHTML = `<button class="btn btn-ghost" id="btnStandup">📋 站会</button><button class="btn btn-primary" id="btnNewItem">+ 上报进度</button>`;
-  } else {
+  if (isReviewerUser()) {
     el.innerHTML = `<button class="btn btn-ghost" id="btnStandup">📋 站会摘要</button><button class="btn btn-ghost" id="btnRisks">⚠️ 风险扫描</button><button class="btn btn-primary" id="btnNewItem">+ 新建</button>`;
+    document.getElementById('btnNewItem')?.addEventListener('click', showNewItemModal);
+  } else {
+    el.innerHTML = `<button class="btn btn-primary" id="btnNewItem">+ 上报进展</button>`;
+    document.getElementById('btnNewItem')?.addEventListener('click', () => navigate('mywork'));
   }
-  document.getElementById('btnNewItem')?.addEventListener('click', () => role === 'executor' ? navigate('submit') : showNewItemModal());
   document.getElementById('btnStandup')?.addEventListener('click', runStandup);
   document.getElementById('btnRisks')?.addEventListener('click', runRisks);
 }
@@ -221,7 +222,33 @@ function renderTaskCard(item) {
 }
 
 function boardView() {
-  return 'kanban';
+  return isReviewerUser() ? 'taskcenter' : 'mywork';
+}
+
+function goTaskCenter(flow = 'all', mode = 'list') {
+  state.kanbanFilter = { flow, reviewer: '', executor: '' };
+  state.kanbanViewMode = mode;
+  navigate('taskcenter');
+}
+
+function goWorkflowBadge() {
+  if (isReviewerUser()) goTaskCenter('all');
+  else navigate('mywork');
+}
+
+function setDemandAiTab(tab) {
+  state.demandAiTab = tab;
+  navigate('demandai');
+}
+
+function setSubmitTab(tab) {
+  state.submitTab = tab;
+  navigate('submit');
+}
+
+function toggleProfileShowAll() {
+  state.profileShowAll = !state.profileShowAll;
+  navigate('profile');
 }
 
 function kanbanBaseItems() {
@@ -437,7 +464,7 @@ function renderLeaderDashboard() {
       : col.id === 'blocked' ? (count ? '需立即处理' : '流动顺畅')
       : col.id === 'terminated' ? '领导终止' : '累计完成';
     const icon = col.id === 'in_progress' ? '⚡' : col.id === 'blocked' ? '🚧' : col.id === 'terminated' ? '⏹' : '✅';
-    return `<div class="flow-stat-card flow-stat-${col.id}" onclick="setKanbanViewMode('board');navigate('kanban')">
+    return `<div class="flow-stat-card flow-stat-${col.id}" onclick="goTaskCenter('${col.id}', '${col.id === 'in_progress' ? 'board' : 'list'}')">
       <div class="flow-stat-icon">${icon}</div>
       <div class="flow-stat-body">
         <div class="flow-stat-label">${col.label}</div>
@@ -478,13 +505,7 @@ function renderLeaderDashboard() {
           <div class="kpi-chip"><span class="kpi-label">WIP 使用率</span><strong>${wipPct}%</strong><span class="kpi-unit">${counts.in_progress}/${WIP_LIMITS.in_progress}</span></div>
           <div class="kpi-chip ${counts.blocked ? 'kpi-alert' : ''}"><span class="kpi-label">待处理阻塞</span><strong>${counts.blocked}</strong><span class="kpi-unit">项</span></div>
         </div>
-        <div class="dashboard-quick-actions">
-          <button class="btn btn-primary btn-sm" onclick="setKanbanViewMode('board');navigate('kanban')">📊 四列看板</button>
-          <button class="btn btn-ghost btn-sm" onclick="setKanbanViewMode('list');navigate('kanban')">📋 列表视图</button>
-          <button class="btn btn-ghost btn-sm" onclick="navigate('review')">🔍 审核备案</button>
-          <button class="btn btn-ghost btn-sm" onclick="runStandup()">📋 站会摘要</button>
-          <button class="btn btn-ghost btn-sm" onclick="runRisks()">⚠️ 风险扫描</button>
-        </div>
+        <p class="dashboard-kanban-hint" style="margin-top:0.75rem;color:var(--muted);font-size:0.82rem">点击上方状态卡片或侧边栏「任务中心」进入任务处理</p>
       </div>
 
       <div class="dashboard-body">
@@ -538,43 +559,40 @@ function renderExecutorDashboard() {
         <div class="kpi-chip"><span class="kpi-label">平均 Lead Time</span><strong>${m.avgLeadTime}</strong><span class="kpi-unit">天</span></div>
       </div>
       <div class="dashboard-quick-actions" style="margin-top:0.5rem">
-        <button class="btn btn-primary btn-sm" onclick="navigate('mywork')">💼 我的工作台</button>
-        <button class="btn btn-ghost btn-sm" onclick="navigate('submit')">📤 需求提交</button>
+        <button class="btn btn-primary btn-sm" onclick="navigate('mywork')">💼 今日工作台</button>
+        <button class="btn btn-ghost btn-sm" onclick="navigate('submit')">📤 提交需求</button>
       </div>
     </div>`;
 }
 
-function renderKanban() {
+function renderKanbanCore() {
   if (!state.kanbanFilter) state.kanbanFilter = { flow: 'all', reviewer: '', executor: '' };
   if (!state.kanbanViewMode) state.kanbanViewMode = 'list';
   const base = kanbanBaseItems();
   const filtered = applyKanbanFilters(base);
   const isBoard = state.kanbanViewMode === 'board';
-
-  const leaderHeader = isReviewerUser() ? `
-    <div class="kanban-page-header">
-      <p class="dashboard-kanban-hint">列表视图与四列看板可切换，支持按状态与人员筛选</p>
-      <div class="dashboard-quick-actions dashboard-quick-actions--inline">
-        <button class="btn btn-ghost btn-sm" onclick="navigate('dashboard')">📊 管理看板</button>
-        <button class="btn btn-ghost btn-sm" onclick="navigate('review')">🔍 审核备案</button>
-        <button class="btn btn-ghost btn-sm" onclick="runStandup()">📋 站会摘要</button>
-        <button class="btn btn-ghost btn-sm" onclick="runRisks()">⚠️ 风险扫描</button>
-      </div>
-    </div>` : `
-    <div class="kanban-lock-note">仅显示与您相关的任务。可切换列表或四列看板查看，请在工作台提交进展。</div>`;
-
   const content = isBoard
     ? `<div class="kanban-page-board">${renderKanbanBoard(filtered)}</div>`
     : renderKanbanListHtml(filtered);
   const hintText = isBoard
     ? `共 ${filtered.length} 项任务 · 四列看板 · ${isReviewerUser() ? '领导可拖拽移列' : '点击卡片查看详情'}`
     : `共 ${filtered.length} 项任务 · 点击列表行查看详情`;
-
-  return `${leaderHeader}
-    ${renderKanbanViewTabs()}
+  return `${renderKanbanViewTabs()}
     ${renderKanbanFilterBar(base)}
     <div id="kanban-content-area">${content}</div>
     <p class="flow-list-hint" id="kanban-list-hint">${hintText}</p>`;
+}
+
+function renderTaskCenter() {
+  const blocked = state.items.filter(i => i.status === 'blocked').length;
+  const alert = blocked
+    ? `<div class="alert-banner">🚧 当前有 <strong>${blocked}</strong> 项阻塞任务待处理 <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('blocked')">立即查看</button></div>`
+    : '';
+  return `${alert}${renderKanbanCore()}`;
+}
+
+function renderKanban() {
+  return renderTaskCenter();
 }
 
 function renderAcceptance() {
@@ -603,6 +621,16 @@ function renderAcceptance() {
       </div>
     </div>`;
   }).join('')}`;
+}
+
+function renderDemandAI() {
+  const tab = state.demandAiTab || 'submit';
+  return `
+    <div class="page-tabs">
+      <button type="button" class="page-tab ${tab === 'submit' ? 'active' : ''}" onclick="setDemandAiTab('submit')">📤 新建需求</button>
+      <button type="button" class="page-tab ${tab === 'ai' ? 'active' : ''}" onclick="setDemandAiTab('ai')">🤖 AI 工具</button>
+    </div>
+    <div class="page-tab-panel">${tab === 'submit' ? renderSubmitBody() : renderAI()}</div>`;
 }
 
 function renderAI() {
@@ -654,153 +682,147 @@ function renderMyWork() {
   const primary = myItems.filter(i => i.assignee === state.user.name);
   const assist = myItems.filter(i => (i.assistants || []).includes(state.user.name) && i.assignee !== state.user.name);
   const done = state.items.filter(i => i.assignee === state.user.name && i.status === 'done');
-  const submitted = state.items.filter(i => i.created_by === state.user.name);
+  const today = new Date().toISOString().slice(0, 10);
+  const noProgressToday = primary.filter(i => !(i.progress_updates || []).some(u => u.date === today)).length;
+  const blockedCount = primary.filter(i => i.status === 'blocked').length;
 
   const renderWorkCard = (i, role) => {
     const latest = (i.progress_updates || [])[0];
     const roleLabel = role === 'primary' ? '主执行' : '协助';
     const roleCls = role === 'primary' ? 'type-story' : 'type-task';
-    return `<div class="card progress-card" style="margin-bottom:0.75rem">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem">
+    return `<div class="card progress-card work-card-compact">
+      <div class="work-card-head">
         <div>
-          ${i.req_no ? `<span class="req-no-tag" style="margin-right:0.35rem">${esc(i.req_no)}</span>` : ''}
+          ${i.req_no ? `<span class="req-no-tag">${esc(i.req_no)}</span>` : ''}
           <span class="type-badge ${roleCls}">${roleLabel}</span>
-          <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
-          <strong style="margin-left:0.35rem">${esc(i.title)}</strong>
-          <span style="color:var(--muted);font-size:0.82rem;margin-left:0.5rem">${STATUS_LABELS[i.status] || i.status} · ${i.story_points || 0} SP</span>
+          <strong>${esc(i.title)}</strong>
+          <span class="project-status-pill ${projectStatusMeta(i).cls}" style="margin-left:0.35rem">${projectStatusMeta(i).label}</span>
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="showItemDetail('${i.id}')">详情</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="showTaskDetailView('${i.id}')">查看进展</button>
       </div>
-      <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.5rem">
-        审核人: <strong>${esc(i.reviewer || '-')}</strong>
-        · 主执行: <strong>${esc(i.assignee || '-')}</strong>
-        ${(i.assistants||[]).length ? `· 其他执行: ${i.assistants.map(esc).join('、')}` : ''}
-      </p>
-      ${latest ? `<p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.5rem">最近进展 (${latest.date}): ${esc(latest.description?.slice(0, 80) || '')}</p>` : ''}
-      <div class="form-group" style="margin-bottom:0.5rem"><label style="font-size:0.82rem">今日进展描述</label>
-        <textarea id="prog-desc-${i.id}" rows="2" placeholder="今天完成了什么工作..."></textarea>
+      ${latest ? `<p class="work-card-latest">最近 (${latest.date})：${esc(latest.description?.slice(0, 60) || '')}</p>` : '<p class="work-card-latest work-card-latest--empty">今日尚未提交进展</p>'}
+      <div class="form-group work-card-form"><textarea id="prog-desc-${i.id}" rows="2" placeholder="填写今日进展..."></textarea></div>
+      <div class="work-card-actions">
+        <select id="prog-blocker-${i.id}" class="work-card-select">${Object.entries(BLOCKER_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+        <input id="prog-blocker-desc-${i.id}" placeholder="卡点说明（可选）" class="work-card-input">
+        <button type="button" class="btn btn-primary btn-sm" onclick="submitProgress('${i.id}')">📤 提交</button>
+        ${ACTIVE_STATUSES.includes(i.status) || i.status === 'blocked' ? `<button type="button" class="btn btn-success btn-sm" onclick="completeTask('${i.id}')">✅ 完成</button>` : ''}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.5rem">
-        <div class="form-group" style="margin:0"><label style="font-size:0.82rem">卡点类型</label>
-          <select id="prog-blocker-${i.id}">
-            ${Object.entries(BLOCKER_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group" style="margin:0"><label style="font-size:0.82rem">卡点说明</label>
-          <input id="prog-blocker-desc-${i.id}" placeholder="描述具体卡点...">
-        </div>
-      </div>
-      <button class="btn btn-primary btn-sm" onclick="submitProgress('${i.id}')">📤 提交今日进展</button>
-      ${ACTIVE_STATUSES.includes(i.status) || i.status === 'blocked' ? `<button class="btn btn-success btn-sm" style="margin-left:0.5rem" onclick="completeTask('${i.id}')">✅ 任务完成</button>` : ''}
     </div>`;
   };
 
   return `
-    <div class="card-grid">
-      <div class="card stat-card blue"><div class="label">主执行任务</div><div class="value">${primary.length}</div></div>
-      <div class="card stat-card yellow"><div class="label">协助任务</div><div class="value">${assist.length}</div></div>
-      <div class="card stat-card green"><div class="label">已完成</div><div class="value">${done.length}</div></div>
-      <div class="card stat-card purple"><div class="label">我提交的</div><div class="value">${submitted.length}</div></div>
+    <div class="work-summary-bar card">
+      <span>待办 <strong>${primary.length}</strong></span>
+      <span>协助 <strong>${assist.length}</strong></span>
+      <span class="${noProgressToday ? 'work-summary-warn' : ''}">今日未报进展 <strong>${noProgressToday}</strong></span>
+      ${blockedCount ? `<span class="work-summary-danger">阻塞 <strong>${blockedCount}</strong></span>` : ''}
+      <button type="button" class="btn btn-ghost btn-sm" onclick="navigate('submit')">📤 提交需求</button>
     </div>
-    <div class="section-title">我负责的主执行任务 (${primary.length})</div>
-    ${primary.length ? primary.map(i => renderWorkCard(i, 'primary')).join('') : '<div class="empty-state">暂无主执行任务</div>'}
-    <div class="section-title" style="margin-top:1.5rem">我协助的任务 (${assist.length}) · 其他执行人员</div>
-    ${assist.length ? assist.map(i => renderWorkCard(i, 'assist')).join('') : '<div class="empty-state">暂无协助任务</div>'}
-    <div style="margin-top:1rem;display:flex;gap:0.5rem">
-      <button class="btn btn-primary" onclick="navigate('submit')">📤 需求提交</button>
-      <button class="btn btn-ghost" onclick="quickChat('帮我规划今天的工作优先级')">🤖 AI 规划今日</button>
-    </div>`;
+    <div class="section-title">我负责的任务 (${primary.length})</div>
+    ${primary.length ? primary.map(i => renderWorkCard(i, 'primary')).join('') : '<div class="empty-state">暂无主执行任务，可在「提交需求」创建</div>'}
+    ${assist.length ? `<div class="section-title" style="margin-top:1.25rem">我协助的任务 (${assist.length})</div>${assist.map(i => renderWorkCard(i, 'assist')).join('')}` : ''}
+    <div class="work-done-hint">已完成 ${done.length} 项 · <button type="button" class="btn btn-ghost btn-sm" onclick="navigate('profile')">在我的记录中查看</button></div>`;
 }
 
-function renderSubmit() {
-  const records = state.meetingRecords || [];
-  const current = records.find(r => r.id === state.currentMeetingId);
+function renderSubmitFormFields() {
   const ai = state.aiStatus || {};
   const reviewers = state.users.filter(u => (u.capabilities || []).includes('reviewer'));
   const executors = state.users.filter(u => (u.capabilities || []).includes('executor') && !(u.capabilities || []).includes('reviewer'));
   return `
-    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">填写需求并选择审核人、主执行人及其他执行人员后提交，任务<strong>立即自动进入执行环节</strong>，执行人可在「我的工作台」查看。审核人仅做备案，必要时可驳回或终止。</p>
-    <div class="submit-workflow">
-      <div class="submit-step">
-        <h3><span class="step-num">1</span> 会议记录</h3>
-        <div class="form-group"><label>输入或粘贴会议内容</label>
-          <textarea id="meetingText" rows="5" placeholder="粘贴会议纪要、讨论记录，或口述要点...">${esc(current?.transcript || '')}</textarea>
-        </div>
-        <div class="meeting-toolbar">
-          <button class="btn btn-primary btn-sm" onclick="saveMeetingText()">💾 保存会议记录</button>
-          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('meetVoiceInput').click()">🎙️ 上传语音</button>
-          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('meetDocInput').click()">📄 上传文档</button>
-          <button class="btn btn-ghost btn-sm" onclick="toggleMeetingRecord()">🔴 现场录音</button>
-          <input type="file" id="meetVoiceInput" accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg" hidden>
-          <input type="file" id="meetDocInput" accept=".txt,.md,.pdf,.docx,text/*,application/pdf" hidden>
-        </div>
-        <div id="meetingRecordStatus" style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem"></div>
-        <div class="section-title" style="font-size:0.82rem">已保存的会议记录</div>
-        <div class="meeting-records" id="meetingRecordsList">
-          ${records.length ? records.map(r => `
-            <div class="meeting-record-item ${r.id === state.currentMeetingId ? 'active' : ''}" onclick="selectMeetingRecord('${r.id}')">
-              <div>${esc(r.title || r.summary?.slice(0, 40) || '会议记录')}</div>
-              <div class="meta">${fmtTime(r.created_at)} · ${esc(r.source_type || 'text')} ${r.status === 'parsed' ? '· ✅ 已拆解' : ''}</div>
-            </div>`).join('') : '<div class="empty-state" style="padding:0.5rem">暂无记录，请先保存或上传</div>'}
-        </div>
-        ${current ? `<div class="meeting-preview" id="meetingPreview">${esc((current.transcript || current.document || '').slice(0, 800))}</div>` : ''}
-        <button class="btn btn-primary" style="width:100%;margin-top:0.75rem" onclick="parseMeetingToForm()" ${!state.currentMeetingId ? 'disabled' : ''}>🤖 AI 拆解并填写需求表单</button>
+    <div class="submit-step card">
+      <div class="form-group"><label>需求标题</label><input id="reqTitle" placeholder="简要描述你的需求"></div>
+      <div class="form-group"><label>应用场景</label><textarea id="reqScene" rows="3" placeholder="描述应用场景和业务目标..."></textarea></div>
+      <div class="form-group"><label>验收目标</label><textarea id="reqAccept" rows="3" placeholder="期望达成什么效果？"></textarea></div>
+      <div class="form-group"><label>期望时间</label><input id="reqDeadline" type="date"></div>
+      <div class="section-title" style="font-size:0.85rem;margin:0.75rem 0 0.5rem">人员分配</div>
+      <div class="form-group"><label>审核人</label>
+        <select id="reqReviewer" style="width:100%;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          <option value="">请选择审核人</option>
+          ${reviewers.map(r => `<option value="${esc(r.name)}">${esc(r.name)} (${esc(r.dept || '')})</option>`).join('')}
+        </select>
       </div>
-
-      <div class="submit-step">
-        <h3><span class="step-num">2</span> 需求提交（可手动修改）</h3>
-        <div class="form-group"><label>需求标题</label><input id="reqTitle" placeholder="简要描述你的需求"></div>
-        <div class="form-group"><label>应用场景</label><textarea id="reqScene" rows="3" placeholder="描述应用场景和业务目标..."></textarea></div>
-        <div class="form-group"><label>验收目标</label><textarea id="reqAccept" rows="3" placeholder="期望达成什么效果？"></textarea></div>
-        <div class="form-group"><label>期望时间</label><input id="reqDeadline" type="date"></div>
-        <div class="section-title" style="font-size:0.85rem;margin:0.75rem 0 0.5rem">人员分配</div>
-        <div class="form-group"><label>审核人</label>
-          <select id="reqReviewer" style="width:100%;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
-            <option value="">请选择审核人</option>
-            ${reviewers.map(r => `<option value="${esc(r.name)}">${esc(r.name)} (${esc(r.dept || '')})</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group"><label>工作需要人数</label>
-          <select id="reqTeamSize" onchange="updateExecutorLimit()" style="width:120px;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
-            <option value="1">1 人</option>
-            <option value="2" selected>2 人</option>
-            <option value="3">3 人</option>
-            <option value="4">4 人</option>
-            <option value="5">5 人</option>
-          </select>
-          <span style="font-size:0.78rem;color:var(--muted);margin-left:0.5rem">含主执行人和协助人员</span>
-        </div>
-        <div class="form-group"><label>主执行人员（多选第一位为主执行，其余为其他执行人员）</label>
-          <select id="reqExecutors" multiple size="5" style="width:100%;padding:0.35rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
-            ${executors.map(e => `<option value="${esc(e.name)}">${esc(e.name)} (${esc(e.dept || '')})</option>`).join('')}
-          </select>
-        </div>
-        <button class="btn btn-primary" onclick="submitRequirement()">📤 提交需求</button>
-        <p style="font-size:0.72rem;color:var(--muted);margin-top:0.5rem">选择审核人和执行人员后将自动审核通过并分配 · 引擎: ${ai.llm ? ai.llm.provider : '未配置'}</p>
+      <div class="form-group"><label>工作需要人数</label>
+        <select id="reqTeamSize" onchange="updateExecutorLimit()" style="width:120px;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          <option value="1">1 人</option><option value="2" selected>2 人</option><option value="3">3 人</option><option value="4">4 人</option><option value="5">5 人</option>
+        </select>
       </div>
-    </div>
+      <div class="form-group"><label>主执行人员（多选，第一位为主执行）</label>
+        <select id="reqExecutors" multiple size="5" style="width:100%;padding:0.35rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          ${executors.map(e => `<option value="${esc(e.name)}">${esc(e.name)} (${esc(e.dept || '')})</option>`).join('')}
+        </select>
+      </div>
+      <button class="btn btn-primary" onclick="submitRequirement()">📤 提交需求</button>
+      <p style="font-size:0.72rem;color:var(--muted);margin-top:0.5rem">提交后自动进入执行 · ${ai.llm ? ai.llm.provider : '未配置 LLM'}</p>
+    </div>`;
+}
 
+function renderSubmitMeetingPanel() {
+  const records = state.meetingRecords || [];
+  const current = records.find(r => r.id === state.currentMeetingId);
+  return `
+    <div class="submit-step card">
+      <div class="form-group"><label>会议内容</label>
+        <textarea id="meetingText" rows="5" placeholder="粘贴会议纪要或讨论要点...">${esc(current?.transcript || '')}</textarea>
+      </div>
+      <div class="meeting-toolbar">
+        <button class="btn btn-primary btn-sm" onclick="saveMeetingText()">💾 保存</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('meetVoiceInput').click()">🎙️ 语音</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('meetDocInput').click()">📄 文档</button>
+        <button class="btn btn-ghost btn-sm" onclick="toggleMeetingRecord()">🔴 录音</button>
+        <input type="file" id="meetVoiceInput" accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg" hidden>
+        <input type="file" id="meetDocInput" accept=".txt,.md,.pdf,.docx,text/*,application/pdf" hidden>
+      </div>
+      <div class="meeting-records" id="meetingRecordsList">
+        ${records.length ? records.map(r => `
+          <div class="meeting-record-item ${r.id === state.currentMeetingId ? 'active' : ''}" onclick="selectMeetingRecord('${r.id}')">
+            <div>${esc(r.title || r.summary?.slice(0, 40) || '会议记录')}</div>
+            <div class="meta">${fmtTime(r.created_at)} · ${esc(r.source_type || 'text')}</div>
+          </div>`).join('') : '<div class="empty-state" style="padding:0.5rem">暂无记录</div>'}
+      </div>
+      <button class="btn btn-primary" style="width:100%;margin-top:0.75rem" onclick="parseMeetingToForm();setSubmitTab('quick')" ${!state.currentMeetingId ? 'disabled' : ''}>🤖 AI 拆解并填入表单</button>
+    </div>`;
+}
+
+function renderSubmitHistory() {
+  return `<div class="item-list card">
+    ${state.items.filter(i => i.created_by === state.user.name).map(i => `
+      <div class="item-row" onclick="showTaskDetailView('${i.id}')">
+        <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
+        <div class="info"><div class="title">${i.req_no ? `<span class="req-no-tag">${esc(i.req_no)}</span> ` : ''}${esc(i.title)}</div>
+        <div class="desc">${STATUS_LABELS[i.status] || i.status} · ${fmtTime(i.created_at)}</div></div>
+      </div>`).join('') || '<div class="empty-state">暂无提交记录</div>'}
+  </div>`;
+}
+
+function renderSubmitBody() {
+  return `${renderSubmitFormFields()}
     <div class="card submit-copilot" style="margin-top:1rem">
-      <h3>💬 AI 智能助手 <span class="llm-tag">${state.llmEnabled ? 'Agent' : '本地'}</span></h3>
-      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">需求填写有疑问？随时询问 AI 协作者</p>
+      <h3>💬 AI 助手</h3>
       <div class="chat-box">
-        <div class="chat-messages" id="submitChatMessages">
-          <div class="chat-msg assistant">你好！我可以帮你完善需求描述、补充验收标准，或根据会议记录给出建议。</div>
-        </div>
+        <div class="chat-messages" id="submitChatMessages"><div class="chat-msg assistant">可帮你完善需求描述与验收标准。</div></div>
         <div class="chat-input-row">
-          <input id="submitChatInput" placeholder="例如：帮我优化验收标准..." onkeydown="if(event.key==='Enter')sendSubmitChat()">
+          <input id="submitChatInput" placeholder="询问 AI..." onkeydown="if(event.key==='Enter')sendSubmitChat()">
           <button class="btn btn-primary btn-sm" onclick="sendSubmitChat()">发送</button>
         </div>
       </div>
     </div>
+    <div class="section-title" style="margin-top:1rem">最近提交</div>
+    ${renderSubmitHistory()}`;
+}
 
-    <div class="section-title" style="margin-top:1.5rem">我提交的需求</div>
-    <div class="item-list">
-      ${state.items.filter(i => i.created_by === state.user.name).map(i => `
-        <div class="item-row" onclick="showItemDetail('${i.id}')">
-          <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
-          <div class="info"><div class="title">${i.req_no ? `<span class="req-no-tag" style="margin-right:0.35rem">${esc(i.req_no)}</span>` : ''}${esc(i.title)}</div><div class="desc">${STATUS_LABELS[i.status] || i.status} · ${taskPeopleText(i)} · ${fmtTime(i.created_at)}</div></div>
-        </div>`).join('') || '<div class="empty-state">暂无提交记录</div>'}
+function renderSubmit() {
+  const tab = state.submitTab || 'quick';
+  return `
+    <div class="page-tabs">
+      <button type="button" class="page-tab ${tab === 'quick' ? 'active' : ''}" onclick="setSubmitTab('quick')">📝 快速提交</button>
+      <button type="button" class="page-tab ${tab === 'meeting' ? 'active' : ''}" onclick="setSubmitTab('meeting')">🎙️ 会议/语音</button>
+      <button type="button" class="page-tab ${tab === 'history' ? 'active' : ''}" onclick="setSubmitTab('history')">📋 提交记录</button>
+    </div>
+    <div class="page-tab-panel">
+      ${tab === 'quick' ? renderSubmitFormFields() + `<div class="card submit-copilot" style="margin-top:1rem"><h3>💬 AI 助手</h3><div class="chat-box"><div class="chat-messages" id="submitChatMessages"><div class="chat-msg assistant">可帮你完善需求描述。</div></div><div class="chat-input-row"><input id="submitChatInput" onkeydown="if(event.key==='Enter')sendSubmitChat()"><button class="btn btn-primary btn-sm" onclick="sendSubmitChat()">发送</button></div></div></div>` : ''}
+      ${tab === 'meeting' ? renderSubmitMeetingPanel() : ''}
+      ${tab === 'history' ? renderSubmitHistory() : ''}
     </div>`;
 }
 
@@ -857,87 +879,246 @@ function renderReview() {
     ${terminated.length ? terminated.map(i => renderReviewCard(i, 'terminated')).join('') : '<div class="empty-state">暂无已终止任务</div>'}`;
 }
 
+function taskEndTime(row = {}) {
+  if (row.completed_at) return row.completed_at;
+  if (row.status === 'done' || row.status === 'terminated') return row.updated_at || '';
+  return '';
+}
+
+function profileProjectStatusMeta(row = {}) {
+  const item = { status: row.status, acceptance_status: row.acceptance_status };
+  return projectStatusMeta(item);
+}
+
+function renderProfileProjectRow(pr) {
+  const meta = profileProjectStatusMeta(pr);
+  const assist = (pr.assistants || []).length ? pr.assistants.map(esc).join('、') : '-';
+  const end = taskEndTime(pr);
+  return `<tr class="profile-task-row" onclick="showTaskDetailView('${pr.item_id}')">
+    <td>${pr.task_no !== '-' ? `<span class="req-no-tag">${esc(pr.task_no)}</span>` : '<span class="flow-list-empty">-</span>'}</td>
+    <td class="flow-list-title"><strong>${esc(pr.task_name)}</strong></td>
+    <td><span class="project-status-pill ${meta.cls}">${meta.label}</span></td>
+    <td>${esc(pr.proposer)}</td>
+    <td>${esc(pr.reviewer)}</td>
+    <td>${esc(pr.assignee)}</td>
+    <td>${assist}</td>
+    <td class="flow-list-time">${fmtTime(pr.created_at) || '-'}</td>
+    <td class="flow-list-time">${end ? fmtTime(end) : '-'}</td>
+    <td class="profile-task-actions" onclick="event.stopPropagation()">
+      <button type="button" class="btn btn-ghost btn-sm profile-task-btn" onclick="showTaskDetailView('${pr.item_id}')">查看</button>
+      <button type="button" class="btn btn-ghost btn-sm profile-task-btn" onclick="downloadTaskDetail('${pr.item_id}')">下载</button>
+    </td>
+  </tr>`;
+}
+
+function renderProfileProjectTable(projects, { title, exportKind, emptyText, limit }) {
+  const total = projects.length;
+  const showAll = state.profileShowAll || !limit;
+  const rows = showAll ? projects : projects.slice(0, limit || total);
+  const count = rows.length;
+  return `<div class="card profile-task-card">
+    <div class="profile-task-head">
+      <div class="section-title">${title} (${total})</div>
+      <div class="profile-task-head-actions">
+        ${limit && total > limit ? `<button type="button" class="btn btn-ghost btn-sm" onclick="toggleProfileShowAll()">${showAll ? '收起' : '展开全部'}</button>` : ''}
+        <button type="button" class="btn btn-ghost btn-sm kanban-export-btn" onclick="exportProfileTaskList('${exportKind}')" ${total ? '' : 'disabled'}>📥 下载清单</button>
+      </div>
+    </div>
+    <div class="project-table-wrap">
+      <table class="project-table profile-task-table">
+        <thead><tr>
+          <th>任务编号</th><th>任务名称</th><th>状态</th>
+          <th>需求提出人</th><th>审核人</th><th>主执行人</th><th>其他执行人</th>
+          <th>开始时间</th><th>结束时间</th><th>操作</th>
+        </tr></thead>
+        <tbody>
+          ${count ? rows.map(renderProfileProjectRow).join('') : `<tr><td colspan="10" class="profile-task-empty">${emptyText}</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function profileTaskExportRow(pr) {
+  const meta = profileProjectStatusMeta(pr);
+  const end = taskEndTime(pr);
+  return [
+    pr.task_no === '-' ? '' : pr.task_no,
+    pr.task_name || '',
+    meta.label,
+    pr.proposer || '',
+    pr.reviewer || '',
+    pr.assignee || '',
+    (pr.assistants || []).join('、'),
+    fmtExportTime(pr.created_at),
+    end ? fmtExportTime(end) : '',
+  ];
+}
+
+function exportProfileTaskList(kind) {
+  const rows = kind === 'review' ? (state.userReviewProjects || []) : (state.userProjects || []);
+  if (!rows.length) {
+    toast('暂无数据可导出', 'error');
+    return;
+  }
+  const headers = ['任务编号', '任务名称', '状态', '需求提出人', '审核人', '主执行人', '其他执行人', '开始时间', '结束时间'];
+  const csv = '\uFEFF' + [headers, ...rows.map(profileTaskExportRow)]
+    .map(row => row.map(csvCell).join(','))
+    .join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const stamp = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
+  const label = kind === 'review' ? '参与审核任务' : '参与任务';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${label}清单_${stamp}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast(`已导出 ${rows.length} 条${label}`);
+}
+
+function buildTaskDetailText(item) {
+  const meta = projectStatusMeta(item);
+  const end = taskEndTime(item);
+  const lines = [
+    `任务编号: ${item.req_no || '-'}`,
+    `任务名称: ${item.title || '-'}`,
+    `状态: ${meta.label}`,
+    `开始时间: ${fmtExportTime(item.created_at) || '-'}`,
+    `结束时间: ${end ? fmtExportTime(end) : '-'}`,
+    `需求提出人: ${item.created_by || '-'}`,
+    `审核人: ${item.reviewer || '-'}`,
+    `主执行人: ${item.assignee || '-'}`,
+    `其他执行人: ${(item.assistants || []).length ? item.assistants.join('、') : '-'}`,
+    '',
+    '任务描述:',
+    item.description || '无',
+    '',
+    '验收标准:',
+    item.acceptance_criteria || '无',
+  ];
+  if (item.blocked_reason) {
+    lines.push('', '阻塞原因:', item.blocked_reason);
+  }
+  const updates = item.progress_updates || [];
+  if (updates.length) {
+    lines.push('', '进展记录:');
+    updates.forEach(u => {
+      lines.push(`- [${u.date || ''}] ${u.user || ''}: ${u.description || ''}${u.blocker_type && u.blocker_type !== 'none' ? ` (${BLOCKER_TYPES[u.blocker_type] || u.blocker_type})` : ''}`);
+    });
+  }
+  return lines.join('\r\n');
+}
+
+function renderTaskProgressTimeline(updates = []) {
+  if (!updates.length) {
+    return `<div class="task-progress-section">
+      <div class="section-title">📅 每日进展提交记录</div>
+      <div class="task-progress-empty">暂无每日进展记录</div>
+    </div>`;
+  }
+  return `<div class="task-progress-section">
+    <div class="section-title">📅 每日进展提交记录 <span class="task-progress-count">${updates.length} 条</span></div>
+    <div class="task-progress-timeline">
+      ${updates.map(u => `<div class="task-progress-item">
+        <div class="task-progress-meta">
+          <strong>${esc(u.date || (u.created_at ? fmtTime(u.created_at).split(/\s/)[0] : ''))}</strong>
+          <span>${esc(u.user || '未知')}</span>
+          ${u.created_at ? `<span class="task-progress-time">${fmtTime(u.created_at)}</span>` : ''}
+        </div>
+        <div class="task-progress-desc">${esc(u.description || '（无文字说明）')}</div>
+        ${u.blocker_type && u.blocker_type !== 'none' ? `<div class="task-progress-blocker">${BLOCKER_ICONS[u.blocker_type] || '🚧'} ${esc(BLOCKER_TYPES[u.blocker_type] || u.blocker_type)}${u.blocker_desc ? `：${esc(u.blocker_desc)}` : ''}</div>` : ''}
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function showTaskDetailView(id) {
+  const item = state.items.find(i => i.id === id);
+  if (!item) return toast('任务不存在', 'error');
+  const meta = projectStatusMeta(item);
+  const end = taskEndTime(item);
+  showModal(`${item.req_no ? esc(item.req_no) + ' · ' : ''}${esc(item.title)}`, `
+    <div class="task-detail-view">
+      <div class="task-detail-meta">
+        ${item.req_no ? `<span class="req-no-tag">${esc(item.req_no)}</span>` : ''}
+        <span class="project-status-pill ${meta.cls}">${meta.label}</span>
+        <span class="type-badge type-${item.type}">${TYPE_LABELS[item.type]}</span>
+      </div>
+      <div class="task-detail-people">${taskPeopleHtml(item)}</div>
+      <div class="task-detail-dates">
+        <span>开始：${fmtTime(item.created_at) || '-'}</span>
+        <span>结束：${end ? fmtTime(end) : '-'}</span>
+      </div>
+      <div class="task-detail-block"><strong>任务描述</strong><p>${esc(item.description || '无描述')}</p></div>
+      ${item.acceptance_criteria ? `<div class="task-detail-block"><strong>验收标准</strong><pre class="task-detail-pre">${esc(item.acceptance_criteria)}</pre></div>` : ''}
+      ${item.blocked_reason ? `<div class="task-detail-block task-detail-block--danger"><strong>阻塞原因</strong><p>${BLOCKER_ICONS[item.blocker_type] || '🚧'} ${esc(item.blocked_reason)}</p></div>` : ''}
+      ${renderTaskProgressTimeline(item.progress_updates || [])}
+      <div class="task-detail-actions">
+        <button type="button" class="btn btn-ghost" onclick="downloadTaskDetail('${id}')">📥 下载详情</button>
+        ${isReviewerUser() ? `<button type="button" class="btn btn-primary" onclick="closeModal();showItemDetail('${id}')">✏️ 编辑任务</button>` : ''}
+      </div>
+    </div>
+  `);
+}
+
+function downloadTaskDetail(id) {
+  const item = state.items.find(i => i.id === id);
+  if (!item) return toast('任务不存在', 'error');
+  const text = buildTaskDetailText(item);
+  const blob = new Blob(['\uFEFF' + text], { type: 'text/plain;charset=utf-8;' });
+  const name = `${item.req_no || '任务'}_${(item.title || '详情').replace(/[\\/:*?"<>|]/g, '_')}.txt`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('任务详情已下载');
+}
+
 function renderProfile() {
   const uid = state.profileUserId || state.user?.id;
   const isSelf = uid === state.user?.id;
   const u = state.profileUser || state.user;
   const p = u?.profile || {};
   const projects = state.userProjects || [];
+  const reviewProjects = state.userReviewProjects || [];
   const tasks = state.items.filter(i => i.assignee === u?.name && !['done', 'terminated'].includes(i.status));
   const assistTasks = state.items.filter(i => (i.assistants || []).includes(u?.name));
+
+  const blockedItems = projects.filter(p => p.status === 'blocked');
 
   return `
     <div class="profile-header card">
       <div class="profile-avatar-lg">${(u?.name || '?').slice(0,1)}</div>
       <div>
-        <h2>${esc(u?.name)} ${isSelf ? '' : `<button class="btn btn-ghost btn-sm" onclick="state.profileUserId=null;navigate('profile')">← 我的主页</button>`}</h2>
+        <h2>${esc(u?.name)} ${isSelf ? '' : `<button class="btn btn-ghost btn-sm" onclick="state.profileUserId=null;navigate('profile')">← 返回</button>`}</h2>
         <p style="color:var(--muted)">工号 ${u?.emp_id} · ${u?.dept || ''}</p>
         <div style="margin-top:0.35rem">${(u?.capabilityLabels || []).map(c => `<span class="cap-tag">${esc(c)}</span>`).join('')}</div>
-        <p style="margin-top:0.5rem;font-size:0.85rem">状态: <strong>${{available:'🟢 空闲',limited:'🟡 有限',busy:'🔴 繁忙'}[p.availability] || '未知'}</strong> · 进行中 ${tasks.length} 项 · 协助 ${assistTasks.length} 项</p>
       </div>
     </div>
 
-    <div class="card" style="margin-top:1rem">
-      <div class="section-title">📂 参与任务（与流动看板实时同步）</div>
-      <div class="project-table-wrap">
-        <table class="project-table">
-          <thead><tr>
-            <th>任务编号</th><th>任务名称</th><th>需求提出人</th>
-            <th>审核人</th><th>主执行人</th><th>其他执行人</th>
-          </tr></thead>
-          <tbody>
-            ${projects.length ? projects.map(pr => `<tr onclick="showItemDetail('${pr.item_id}')" style="cursor:pointer">
-              <td>${pr.task_no !== '-' ? `<span class="req-no-tag">${esc(pr.task_no)}</span>` : '<span style="color:var(--muted)">-</span>'}</td>
-              <td><strong>${esc(pr.task_name)}</strong></td>
-              <td>${esc(pr.proposer)}</td>
-              <td>${esc(pr.reviewer)}</td>
-              <td>${esc(pr.assignee)}</td>
-              <td>${pr.assistants.length ? pr.assistants.map(esc).join('、') : '-'}</td>
-            </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--muted)">暂无参与任务</td></tr>'}
-          </tbody>
-        </table>
-      </div>
+    <div class="profile-summary-bar card">
+      <span>状态 <strong>${{available:'🟢 空闲',limited:'🟡 有限',busy:'🔴 繁忙'}[p.availability] || '未知'}</strong></span>
+      <span>进行中 <strong>${tasks.length}</strong></span>
+      <span>协助 <strong>${assistTasks.length}</strong></span>
+      ${isReviewerUser() ? `<span>审核 <strong>${reviewProjects.length}</strong></span>` : ''}
+      ${blockedItems.length ? `<span class="profile-summary-danger">阻塞 <strong>${blockedItems.length}</strong></span>` : ''}
+      ${isReviewerUser() ? `<button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('all')">任务中心 →</button>` : `<button type="button" class="btn btn-ghost btn-sm" onclick="navigate('mywork')">工作台 →</button>`}
     </div>
 
-    <div class="grid-2" style="margin-top:1rem;display:grid;grid-template-columns:1fr 1fr;gap:1rem">
-      <div class="card"><div class="section-title">📋 手上任务</div>
-        ${tasks.map(t => `<div style="padding:0.4rem 0;font-size:0.85rem">• [${STATUS_LABELS[t.status] || t.status}] ${t.req_no ? esc(t.req_no) + ' ' : ''}${esc(t.title)}</div>`).join('') || '<p style="color:var(--muted)">无进行中任务</p>'}
-        ${assistTasks.length ? `<div class="section-title" style="margin-top:0.75rem">协助任务</div>${assistTasks.map(t => `<div style="padding:0.4rem 0;font-size:0.85rem">• ${t.req_no ? esc(t.req_no) + ' ' : ''}${esc(t.title)} (协助)</div>`).join('')}` : ''}
-      </div>
-      <div class="card"><div class="section-title">🚧 当前卡点</div>
-        ${projects.filter(p => p.status === 'blocked').length ? projects.filter(p => p.status === 'blocked').map(p =>
-          `<div style="padding:0.5rem 0;border-bottom:1px solid var(--border);font-size:0.85rem">
-            <strong>${esc(p.task_name)}</strong><br>
-            <span style="color:var(--danger)">${BLOCKER_ICONS[p.blocker_type] || '🚧'} ${esc(p.blocked_reason || '')}</span>
-          </div>`).join('') : '<p style="color:var(--muted)">无阻塞项 🎉</p>'}
-      </div>
-    </div>`;
-}
+    ${renderProfileProjectTable(projects, {
+      title: '📂 参与任务',
+      exportKind: 'projects',
+      emptyText: '暂无参与任务',
+      limit: 5,
+    })}
 
-function enhanceProfileProjects() {
-  const table = document.querySelector('.project-table');
-  if (!table) return;
-  const headerRow = table.querySelector('thead tr');
-  if (headerRow && !Array.from(headerRow.children).some(th => th.textContent.trim() === '状态')) {
-    const th = document.createElement('th');
-    th.textContent = '状态';
-    headerRow.insertBefore(th, headerRow.children[2] || null);
-  }
-  const rows = Array.from(table.querySelectorAll('tbody tr'));
-  if (!state.userProjects?.length) {
-    const emptyCell = rows[0]?.querySelector('td');
-    if (emptyCell) emptyCell.colSpan = 7;
-    return;
-  }
-  rows.forEach((row, index) => {
-    if (row.querySelector('.project-status-pill')) return;
-    const pr = state.userProjects[index];
-    if (!pr) return;
-    const meta = projectStatusMeta(pr);
-    const td = document.createElement('td');
-    td.innerHTML = `<span class="project-status-pill ${meta.cls}">${meta.label}</span>`;
-    row.insertBefore(td, row.children[2] || null);
-  });
+    ${isReviewerUser() ? renderProfileProjectTable(reviewProjects, {
+      title: '🔍 参与审核的任务',
+      exportKind: 'review',
+      emptyText: '暂无参与审核的任务',
+      limit: 5,
+    }) : ''}`;
 }
 
 function renderTeam() {
@@ -1147,7 +1328,7 @@ function showAiUploadResult(data, type) {
           <div class="ai-result" style="display:block;max-height:200px">${esc(data.document)}</div></div>
       </div>
       ${(data.createdItems?.stories || []).length ? `<p style="margin-top:0.75rem;font-size:0.85rem">已创建 <strong>${data.createdItems.stories.length}</strong> 个 Story</p>` : ''}
-      <button class="btn btn-ghost btn-sm" style="margin-top:0.5rem" onclick="navigate('kanban')">查看流动看板 →</button>
+      <button class="btn btn-ghost btn-sm" style="margin-top:0.5rem" onclick="goTaskCenter('all')">查看任务中心 →</button>
     </div>`;
   const req = document.getElementById('aiRequirement');
   if (req) req.value = data.transcript || data.text || '';
@@ -1192,17 +1373,27 @@ async function processAiDocument(file) {
 // ── Actions ──
 async function navigate(view) {
   if (view === 'voice') view = 'submit';
+  if (view === 'kanban' || view === 'review' || view === 'acceptance') {
+    if (view === 'review') state.kanbanFilter = { flow: 'in_progress', reviewer: '', executor: '' };
+    else if (view === 'acceptance') state.kanbanFilter = { flow: 'done', reviewer: '', executor: '' };
+    view = 'taskcenter';
+  } else if (view === 'ai') {
+    state.demandAiTab = 'ai';
+    view = 'demandai';
+  }
+
   state.currentView = view;
   document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
   const titles = {
-    dashboard: isReviewerUser() ? '管理看板' : '仪表盘',
-    kanban: '流动看板', review: '审核备案', acceptance: '归档查看', ai: 'AI 助手',
-    mywork: '我的工作台', submit: '需求提交', team: '团队管理', profile: '个人主页',
+    taskcenter: '任务中心', dashboard: isReviewerUser() ? '概览' : '仪表盘',
+    demandai: '需求与 AI', mywork: '今日工作台', submit: '提交需求',
+    profile: isReviewerUser() ? '我的' : '我的记录', team: '团队',
+    kanban: '任务中心', review: '任务中心', acceptance: '任务中心', ai: '需求与 AI',
   };
   document.getElementById('pageTitle').textContent = titles[view] || view;
   await loadData();
-  if (view === 'submit') await loadMeetingRecords();
-  if (view === 'mywork' || view === 'kanban') {
+  if (view === 'submit' || view === 'demandai') await loadMeetingRecords();
+  if (view === 'mywork' || view === 'taskcenter') {
     const isExecutor = (state.user?.capabilities || []).includes('executor');
     if (isExecutor) {
       try { state.myWorkItems = await api('/items/my-work'); } catch { state.myWorkItems = []; }
@@ -1212,12 +1403,16 @@ async function navigate(view) {
     const uid = state.profileUserId || state.user?.id;
     state.profileUser = await api(`/users/${uid}`);
     state.userProjects = await api(`/users/${uid}/projects`);
+    state.userReviewProjects = await api(`/users/${uid}/review-projects`);
   }
-  const renderers = { dashboard: renderDashboard, kanban: renderKanban, review: renderReview, acceptance: renderAcceptance, ai: renderAI, mywork: renderMyWork, submit: renderSubmit, team: renderTeam, profile: renderProfile };
+  const renderers = {
+    taskcenter: renderTaskCenter, dashboard: renderDashboard, demandai: renderDemandAI,
+    mywork: renderMyWork, submit: renderSubmit, profile: renderProfile, team: renderTeam,
+    kanban: renderTaskCenter, review: renderTaskCenter, acceptance: renderTaskCenter, ai: renderDemandAI,
+  };
   document.getElementById('content').innerHTML = renderers[view] ? renderers[view]() : '<div class="empty-state">页面不存在</div>';
-  if (view === 'profile') enhanceProfileProjects();
-  if (view === 'kanban' && state.kanbanViewMode === 'board') initDragDrop();
-  if (view === 'submit') initSubmitPage();
+  if (view === 'taskcenter' && state.kanbanViewMode === 'board') initDragDrop();
+  if (view === 'submit' || (view === 'demandai' && state.demandAiTab === 'submit')) initSubmitPage();
 }
 
 function flowStatusBody(category, extra = {}) {
@@ -1413,15 +1608,13 @@ function showItemDetail(id) {
     <div style="font-size:0.85rem;margin-bottom:0.75rem;padding:0.5rem;background:var(--bg);border-radius:6px">${taskPeopleHtml(item)}</div>
     <p style="color:var(--muted);margin-bottom:0.75rem">${esc(item.description || '无描述')}</p>
     ${item.blocked_reason ? `<p style="color:var(--danger);font-size:0.85rem;margin-bottom:0.5rem">${BLOCKER_ICONS[item.blocker_type] || '🚧'} ${esc(item.blocked_reason)}</p>` : ''}
+    ${renderTaskProgressTimeline(updates)}
+    <div class="section-title" style="font-size:0.85rem;margin-top:0.5rem">任务编辑</div>
     <div class="form-group"><label>状态</label><select id="eStatus">${FLOW_COLS.map(c => `<option value="${c.id}" ${flowCategory(item) === c.id ? 'selected' : ''}>${c.label}</option>`).join('')}</select></div>
     <div class="form-group"><label>负责人</label><input id="eAssignee" value="${esc(item.assignee || '')}"></div>
     <div class="form-group"><label>Story Points</label><input id="ePts" type="number" value="${item.story_points || 0}"></div>
     ${item.status === 'blocked' ? `<div class="form-group"><label>阻塞原因</label><input id="eBlocked" value="${esc(item.blocked_reason || '')}"></div>` : ''}
     <div class="form-group"><label>验收标准</label><textarea id="eCriteria">${esc(item.acceptance_criteria || '')}</textarea></div>
-    ${updates.length ? `<div class="section-title" style="font-size:0.85rem">进展记录</div>
-      <div style="max-height:120px;overflow-y:auto;font-size:0.82rem;margin-bottom:0.75rem">
-        ${updates.slice(0, 5).map(u => `<div style="padding:0.35rem 0;border-bottom:1px solid var(--border)"><strong>${u.date}</strong> ${esc(u.user)}: ${esc(u.description)}${u.blocker_type && u.blocker_type !== 'none' ? ` <span style="color:var(--danger)">[${BLOCKER_TYPES[u.blocker_type]}]</span>` : ''}</div>`).join('')}
-      </div>` : ''}
     ${canProgress ? `<div class="section-title" style="font-size:0.85rem">提交进展</div>
       <div class="form-group"><textarea id="modalProgDesc" rows="2" placeholder="今日进展..."></textarea></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
@@ -1885,7 +2078,7 @@ async function initApp() {
     setupUserCard();
     buildNav();
     buildTopbar();
-    const defaultView = state.roleConfig?.nav?.[0]?.id || 'dashboard';
+    const defaultView = state.user?.defaultView || state.roleConfig?.defaultView || state.roleConfig?.nav?.[0]?.id || 'mywork';
     await navigate(defaultView);
   } catch { localStorage.clear(); location.href = '/login.html'; }
 }

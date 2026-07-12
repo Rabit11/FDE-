@@ -131,6 +131,57 @@ body {
 .cap-tag { display: inline-block; font-size: 0.68rem; padding: 0.1rem 0.4rem; margin: 0.1rem; border-radius: 4px; background: #eaf2ff; color: var(--accent-hover); }
 .profile-header { display: flex; gap: 1.25rem; align-items: center; }
 .profile-avatar-lg { width: 72px; height: 72px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--cyan)); display: flex; align-items: center; justify-content: center; font-size: 2rem; font-weight: 700; color: #fff; flex-shrink: 0; box-shadow: 0 12px 24px rgba(37,99,235,0.18); }
+.profile-task-card { margin-top: 1rem; }
+.profile-task-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; }
+.profile-task-head .section-title { margin: 0; }
+.profile-task-head-actions { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.profile-summary-bar { margin-top: 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; padding: 0.75rem 1rem; font-size: 0.85rem; }
+.profile-summary-danger { color: var(--danger); }
+.page-tabs { display: inline-flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 1rem; padding: 0.25rem; background: #f1f5f9; border-radius: 8px; border: 1px solid var(--border); }
+.page-tab { padding: 0.42rem 0.9rem; border: none; border-radius: 6px; background: transparent; font-size: 0.82rem; font-weight: 700; color: var(--muted); cursor: pointer; }
+.page-tab.active { background: #fff; color: #153e75; box-shadow: 0 1px 3px rgba(15,46,91,0.1); }
+.page-tab-panel { min-height: 200px; }
+.alert-banner { padding: 0.65rem 1rem; margin-bottom: 0.85rem; border-radius: 8px; background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; font-size: 0.85rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.work-summary-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-bottom: 1rem; padding: 0.85rem 1rem; font-size: 0.88rem; }
+.work-summary-warn { color: var(--warning, #d97706); }
+.work-summary-danger { color: var(--danger); }
+.work-card-compact { margin-bottom: 0.75rem; }
+.work-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.5rem; }
+.work-card-latest { font-size: 0.82rem; color: var(--muted); margin-bottom: 0.5rem; }
+.work-card-latest--empty { color: var(--warning, #d97706); }
+.work-card-form { margin-bottom: 0.5rem; }
+.work-card-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+.work-card-select, .work-card-input { flex: 1; min-width: 100px; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.82rem; }
+.work-done-hint { margin-top: 1rem; font-size: 0.82rem; color: var(--muted); }
+.profile-task-table tbody tr.profile-task-row { cursor: pointer; }
+.profile-task-actions { white-space: nowrap; min-width: 108px; }
+.profile-task-btn { padding: 0.2rem 0.45rem !important; font-size: 0.72rem !important; margin-right: 0.2rem; }
+.profile-task-empty { text-align: center; color: var(--muted); padding: 1.25rem !important; }
+.profile-side-grid { margin-top: 1rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 900px) { .profile-side-grid { grid-template-columns: 1fr; } }
+
+.task-progress-section { margin: 0.85rem 0; }
+.task-progress-count { font-size: 0.75rem; color: var(--muted); font-weight: 600; }
+.task-progress-empty { color: var(--muted); font-size: 0.85rem; padding: 0.75rem; background: var(--bg); border-radius: 8px; border: 1px dashed var(--border); }
+.task-progress-timeline { max-height: 280px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: #fafcff; }
+.task-progress-item { padding: 0.7rem 0.85rem; border-bottom: 1px solid var(--border); }
+.task-progress-item:last-child { border-bottom: none; }
+.task-progress-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.75rem; font-size: 0.78rem; color: var(--muted); margin-bottom: 0.35rem; }
+.task-progress-meta strong { color: var(--text); font-size: 0.82rem; }
+.task-progress-time { margin-left: auto; }
+.task-progress-desc { font-size: 0.86rem; color: var(--text); line-height: 1.55; white-space: pre-wrap; }
+.task-progress-blocker { margin-top: 0.35rem; font-size: 0.78rem; color: var(--danger); }
+.task-detail-view { font-size: 0.88rem; }
+.task-detail-meta { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin-bottom: 0.65rem; }
+.task-detail-people { padding: 0.55rem 0.65rem; background: var(--bg); border-radius: 8px; margin-bottom: 0.65rem; font-size: 0.84rem; }
+.task-detail-dates { display: flex; flex-wrap: wrap; gap: 1rem; color: var(--muted); font-size: 0.8rem; margin-bottom: 0.75rem; }
+.task-detail-block { margin-bottom: 0.75rem; }
+.task-detail-block strong { display: block; margin-bottom: 0.3rem; color: #1e40af; font-size: 0.82rem; }
+.task-detail-block p { color: var(--muted); line-height: 1.6; white-space: pre-wrap; }
+.task-detail-block--danger p { color: var(--danger); }
+.task-detail-pre { white-space: pre-wrap; font-family: inherit; font-size: 0.82rem; color: var(--muted); background: var(--bg); padding: 0.55rem 0.65rem; border-radius: 6px; border: 1px solid var(--border); }
+.task-detail-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+.task-detail-actions .btn { flex: 1; min-width: 120px; }
 .user-avatar {
   width: 36px; height: 36px; border-radius: 50%;
   background: linear-gradient(135deg, var(--accent), var(--cyan));
@@ -311,8 +362,10 @@ body {
 .tag.blue { background: #dbeafe; color: #1d4ed8; }
 
 .sidebar-footer { padding: 1rem; border-top: 1px solid var(--border); flex-shrink: 0; }
-.workflow-badge { font-size: 0.75rem; color: var(--muted); padding: 0.65rem; background: #f8fbff; border: 1px solid var(--border); border-radius: 6px; }
+.workflow-badge { font-size: 0.75rem; color: var(--muted); padding: 0.65rem; background: #f8fbff; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
 .workflow-badge strong { color: var(--accent-hover); }
+.workflow-badge--alert { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+.workflow-badge--alert strong { color: #dc2626; }
 
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 

@@ -316,7 +316,19 @@ const queries = {
       ['story', 'epic', 'task', 'bug'].includes(i.type) &&
       (i.assignee === userName || (i.assistants || []).includes(userName) || i.created_by === userName)
     );
-    return items.map(i => ({
+    return items.map(i => queries.mapProfileProjectRow(i))
+      .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  },
+  getUserReviewProjects(userName) {
+    const items = _data.items.filter(i =>
+      ['story', 'epic', 'task', 'bug'].includes(i.type) &&
+      i.reviewer === userName
+    );
+    return items.map(i => queries.mapProfileProjectRow(i))
+      .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  },
+  mapProfileProjectRow(i) {
+    return {
       item_id: i.id,
       task_no: i.req_no || '-',
       task_name: i.title,
@@ -329,8 +341,13 @@ const queries = {
       acceptance_feedback: i.acceptance_feedback,
       blocker_type: i.blocker_type,
       blocked_reason: i.blocked_reason,
+      description: i.description || '',
+      acceptance_criteria: i.acceptance_criteria || '',
+      progress_updates: i.progress_updates || [],
+      created_at: i.created_at || null,
+      completed_at: i.completed_at || null,
       updated_at: i.updated_at || i.created_at,
-    })).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+    };
   },
   logActivity(itemId, action, detail, actor = 'system') {
     _data.activity_log.push({

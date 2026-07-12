@@ -11,7 +11,7 @@ const asr = require('./ai/asr');
 const voice = require('./ai/voice');
 const assigner = require('./ai/assign');
 const meeting = require('./ai/meeting');
-const { CAPABILITIES, login, logout, authMiddleware, requirePermission, getNavForUser, getRoleLabel, isLeader } = require('./auth');
+const { CAPABILITIES, login, logout, authMiddleware, requirePermission, getNavForUser, getDefaultView, getRoleLabel, isLeader } = require('./auth');
 
 async function autoApproveItem(itemId, reviewer, teamSize = 2, actor = 'system') {
   const item = queries.getItem(itemId);
@@ -86,7 +86,12 @@ app.post('/api/auth/logout', auth, (req, res) => {
 app.get('/api/auth/me', auth, (req, res) => {
   res.json({
     user: req.user,
-    roleConfig: { label: req.user.roleLabel, nav: req.user.nav || getNavForUser(req.user), capabilities: req.user.capabilities },
+    roleConfig: {
+      label: req.user.roleLabel,
+      nav: req.user.nav || getNavForUser(req.user),
+      capabilities: req.user.capabilities,
+      defaultView: req.user.defaultView || getDefaultView(req.user),
+    },
     llmEnabled: llm.isConfigured(),
     ai: llm.getProviderInfo(),
   });
@@ -125,6 +130,14 @@ app.get('/api/users/:id/projects', (req, res) => {
     return res.status(403).json({ error: '无权查看' });
   }
   res.json(queries.getUserProjects(user.name));
+});
+app.get('/api/users/:id/review-projects', (req, res) => {
+  const user = queries.getUserById(req.params.id);
+  if (!user) return res.status(404).json({ error: '用户不存在' });
+  if (req.params.id !== req.user.id && !req.user.can_view_profiles && req.user.role !== 'admin') {
+    return res.status(403).json({ error: '无权查看' });
+  }
+  res.json(queries.getUserReviewProjects(user.name));
 });
 
 app.patch('/api/users/:id/profile', (req, res) => {
