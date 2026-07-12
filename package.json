@@ -1,19 +1,27 @@
 {
   "name": "ai-agile-platform",
   "version": "1.0.0",
-  "description": "AI赋能敏捷项目管理平台 - Sprint/Kanban/AI Assistant",
+  "description": "FDE管理平台 - 流动看板/AI Assistant",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "publish": "node scripts/publish-github.js"
   },
-  "keywords": ["agile", "ai", "project-management", "kanban", "scrum"],
+  "keywords": [
+    "agile",
+    "ai",
+    "project-management",
+    "kanban",
+    "scrum"
+  ],
   "license": "MIT",
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "mammoth": "^1.12.0",
     "multer": "^1.4.5-lts.1",
+    "pdf-parse": "^2.4.5",
     "uuid": "^11.0.5"
   }
 }

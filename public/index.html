@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AgileAI · AI赋能敏捷项目管理平台</title>
+  <title>FDE管理平台</title>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
     <aside class="sidebar">
       <div class="logo">
         <span class="logo-icon">⚡</span>
-        <span class="logo-text">AgileAI</span>
+        <span class="logo-text">FDE管理平台</span>
       </div>
       <div class="user-card" id="userCard">
         <div class="user-avatar" id="userAvatar">?</div>
@@ -22,7 +22,7 @@
       </div>
       <nav class="nav" id="navMenu"></nav>
       <div class="sidebar-footer">
-        <div class="sprint-badge" id="activeSprintBadge" style="cursor:pointer" title="点击查看 Sprint">加载中...</div>
+        <div class="workflow-badge" id="workflowBadge" style="cursor:pointer;font-size:0.75rem;color:var(--muted);padding:0.5rem;text-align:center" title="点击查看流动看板" onclick="navigate('kanban')">加载中...</div>
         <button class="btn btn-ghost btn-sm" id="btnLogout" style="width:100%;margin-top:0.5rem">退出登录</button>
       </div>
     </aside>

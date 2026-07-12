@@ -22,8 +22,8 @@ async function processVoiceFile(filePath, originalName, mimeType, user, queries,
     if (asr.isAsrConfigured()) {
       const result = await asr.transcribeFile(filePath, originalName, mimeType);
       transcript = result.text;
-      asrProvider = result.provider;
-      steps.push({ step: 'transcribe', status: 'ok', provider: asrProvider, model: result.model });
+      asrProvider = `${result.provider} (${result.model})`;
+      steps.push({ step: 'transcribe', status: 'ok', provider: asrProvider, model: result.model, mode: result.mode, segments: result.segments?.length || 0 });
     } else {
       throw new Error('未配置 DASHSCOPE_API_KEY');
     }
@@ -83,17 +83,16 @@ async function processVoiceFile(filePath, originalName, mimeType, user, queries,
   // Step 4: 自动创建任务（可选）
   let createdItems = { epic: null, stories: [], tasks: [] };
   if (options.autoCreate !== false) {
-    const sprintId = options.sprint_id || queries.getSprints().find(s => s.status === 'active')?.id;
-    const status = user.role === 'executor' ? 'submitted' : 'backlog';
+    const status = user.role === 'executor' ? 'submitted' : 'in_progress';
 
     createdItems.epic = queries.createItem({
-      ...analysis.epic, sprint_id: sprintId, status, created_by: user.name,
+      ...analysis.epic, status, created_by: user.name,
       description: analysis.document?.slice(0, 500) || analysis.epic.description,
     });
 
     createdItems.stories = (analysis.stories || []).map(s =>
       queries.createItem({
-        ...s, sprint_id: sprintId, parent_id: createdItems.epic.id,
+        ...s, parent_id: createdItems.epic.id,
         status, created_by: user.name,
       })
     );
@@ -102,7 +101,7 @@ async function processVoiceFile(filePath, originalName, mimeType, user, queries,
       const parent = createdItems.stories.find(s => s.title === t.parent_title);
       createdItems.tasks.push(queries.createItem({
         type: 'task', title: t.title, parent_id: parent?.id,
-        sprint_id: sprintId, status: 'backlog', priority: 3, created_by: user.name,
+        status: 'in_progress', priority: 3, created_by: user.name,
       }));
     });
 

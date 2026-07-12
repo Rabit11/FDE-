@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { v4: uuid } = require('uuid');
-const { SEED_USERS, hashPassword } = require('./auth');
+const { SEED_USERS, hashPassword, LEADER_NAMES } = require('./auth');
 
 const dataDir = path.join(__dirname, '..', 'data');
 const dbFile = path.join(dataDir, 'platform.json');
@@ -10,12 +10,48 @@ if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 function load() {
   if (!fs.existsSync(dbFile)) {
-    return { sprints: [], items: [], activity_log: [], ai_insights: [], chat_history: [], voice_documents: [] };
+    return { items: [], activity_log: [], ai_insights: [], chat_history: [], voice_documents: [] };
   }
   const data = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
   if (!data.users) data.users = [];
   if (!data.chat_history) data.chat_history = [];
   if (!data.voice_documents) data.voice_documents = [];
+  if (!data.req_counter) data.req_counter = {};
+  let healed = false;
+  if (data.sprints) {
+    delete data.sprints;
+    healed = true;
+  }
+  data.items.forEach(i => {
+    if (!i.progress_updates) i.progress_updates = [];
+    if (!i.assistants) i.assistants = [];
+    if (i.reviewer === undefined) i.reviewer = null;
+    if (i.team_size === undefined) i.team_size = null;
+    if (i.blocker_type === undefined) i.blocker_type = null;
+    if (i.sprint_id) {
+      delete i.sprint_id;
+      healed = true;
+    }
+    if (i.status === 'backlog') {
+      i.status = 'in_progress';
+      healed = true;
+    }
+    if (!i.req_no && i.status === 'submitted') {
+      const year = new Date(i.created_at || Date.now()).getFullYear();
+      data.req_counter[year] = (data.req_counter[year] || 0) + 1;
+      i.req_no = `REQ-${year}-${String(data.req_counter[year]).padStart(4, '0')}`;
+    }
+    if (i.status === 'done' && i.acceptance_status === 'terminated') {
+      i.status = 'terminated';
+      healed = true;
+    }
+    if (i.status === 'submitted' && i.reviewer && i.assignee) {
+      i.status = 'in_progress';
+      i.updated_at = new Date().toISOString();
+      healed = true;
+    }
+  });
+  if (healed) save(data);
   return data;
 }
 
@@ -24,17 +60,39 @@ function save(data) {
 }
 
 function seedUsers(data) {
-  if (data.users.length > 0) return;
-  data.users = SEED_USERS.map(u => ({
-    id: uuid(),
-    emp_id: u.emp_id,
-    name: u.name,
-    password: hashPassword(u.password),
-    role: u.role,
-    dept: u.dept,
-    active: true,
-    created_at: new Date().toISOString(),
-  }));
+  const defaultProfile = () => ({
+    bio: '', skills: [], availability: 'available', max_wip: 4,
+    project_history: [],
+  });
+
+  if (data.users.length === 0) {
+    data.users = SEED_USERS.map(u => ({
+      id: uuid(), emp_id: u.emp_id, name: u.name,
+      password: hashPassword(u.password), role: u.role, dept: u.dept,
+      capabilities: u.capabilities || ['proposer', 'executor'],
+      can_manage_users: u.can_manage_users || false,
+      can_view_profiles: true,
+      profile: defaultProfile(),
+      active: true, created_at: new Date().toISOString(),
+    }));
+    save(data);
+    return;
+  }
+
+  data.users.forEach(u => {
+    if (!u.capabilities) {
+      u.capabilities = u.role === 'admin' || u.role === 'manager'
+        ? ['reviewer', 'proposer', 'executor'] : ['proposer', 'executor'];
+      u.can_manage_users = u.role === 'admin';
+      u.can_view_profiles = true;
+      u.role = u.role === 'executor' ? 'member' : u.role;
+    }
+    if (LEADER_NAMES.includes(u.name) || (u.role === 'manager' && (u.capabilities || []).includes('reviewer'))) {
+      u.can_manage_users = false;
+    }
+    if (u.role === 'admin') u.can_manage_users = true;
+    if (!u.profile) u.profile = defaultProfile();
+  });
   save(data);
 }
 
@@ -42,35 +100,25 @@ function seedIfEmpty(data) {
   seedUsers(data);
   if (data.items.length > 0) return data;
 
-  const sprintId = uuid();
   const now = new Date();
-  const end = new Date(now);
-  end.setDate(end.getDate() + 14);
-
-  data.sprints.push({
-    id: sprintId, name: 'Sprint 1', goal: '搭建 AI 敏捷平台 MVP，完成看板与 AI 需求助手',
-    start_date: now.toISOString().slice(0, 10), end_date: end.toISOString().slice(0, 10),
-    status: 'active', created_at: now.toISOString(),
-  });
 
   const stories = [
-    { title: '智能 Backlog 管理', desc: '支持 Epic/Story/Task 层级与拖拽排序', pts: 5, status: 'done' },
-    { title: '流动看板与 WIP 限制', desc: 'Kanban 多列视图，WIP 上限告警', pts: 8, status: 'in_progress' },
+    { title: '流动看板与 WIP 限制', desc: 'Kanban 三列视图，WIP 上限告警', pts: 8, status: 'in_progress' },
     { title: 'AI 需求拆分助手', desc: '自然语言需求自动拆分为用户故事', pts: 5, status: 'in_progress' },
-    { title: '在线验收中心', desc: '需求方在线验收，反馈自动转 Backlog', pts: 3, status: 'review' },
-    { title: 'Sprint 度量仪表盘', desc: 'Lead Time、燃尽图、吞吐量', pts: 5, status: 'todo' },
-    { title: 'AI 站会摘要生成', desc: '基于任务变更自动生成站会报告', pts: 3, status: 'backlog' },
-    { title: '风险预警引擎', desc: '延期概率预测与阻塞智能分类', pts: 5, status: 'backlog' },
+    { title: '在线验收中心', desc: '需求方在线验收，反馈自动回流', pts: 3, status: 'review' },
+    { title: '度量仪表盘', desc: 'Lead Time、吞吐量', pts: 5, status: 'todo' },
+    { title: 'AI 站会摘要生成', desc: '基于任务变更自动生成站会报告', pts: 3, status: 'in_progress' },
+    { title: '风险预警引擎', desc: '延期概率预测与阻塞智能分类', pts: 5, status: 'in_progress' },
   ];
 
   stories.forEach((s, i) => {
     data.items.push({
       id: uuid(), type: 'story', title: s.title, description: s.desc, status: s.status,
-      priority: i < 2 ? 1 : 2, story_points: s.pts, sprint_id: sprintId,
+      priority: i < 2 ? 1 : 2, story_points: s.pts,
       acceptance_criteria: `Given ${s.title}\nWhen 功能完成\nThen 可通过验收测试`,
       ai_generated: 0, blocked_reason: null, demo_url: null,
       acceptance_status: 'pending', acceptance_feedback: null,
-      assignee: i === 1 ? '赵立泽' : i === 2 ? '王诗瑶' : null,
+      assignee: i === 0 ? '赵立泽' : i === 1 ? '王诗瑶' : null,
       created_by: '曾锐', parent_id: null,
       created_at: now.toISOString(), updated_at: now.toISOString(), completed_at: s.status === 'done' ? now.toISOString() : null,
     });
@@ -78,7 +126,7 @@ function seedIfEmpty(data) {
 
   data.items.push({
     id: uuid(), type: 'bug', title: '看板拖拽在移动端失效', description: '触摸事件未绑定',
-    status: 'blocked', priority: 1, story_points: 2, sprint_id: sprintId,
+    status: 'blocked', priority: 1, story_points: 2,
     blocked_reason: '等待前端工程师修复触摸事件',
     acceptance_criteria: '', ai_generated: 0, demo_url: null,
     acceptance_status: 'pending', acceptance_feedback: null,
@@ -88,7 +136,7 @@ function seedIfEmpty(data) {
 
   data.items.push({
     id: uuid(), type: 'story', title: 'AI 模型接入与智能对话', description: '接入 LLM API 实现智能需求拆分和 AI Copilot',
-    status: 'submitted', priority: 1, story_points: 8, sprint_id: sprintId,
+    status: 'submitted', priority: 1, story_points: 8,
     acceptance_criteria: 'Given LLM API 配置\nWhen 用户提问\nThen AI 给出专业回答',
     ai_generated: 0, blocked_reason: null, demo_url: null,
     acceptance_status: 'pending', acceptance_feedback: null,
@@ -105,10 +153,19 @@ let _data = seedIfEmpty(load());
 const queries = {
   _persist() { save(_data); },
 
-  getUsers() { return _data.users.map(u => ({ ...u, password: undefined })); },
-  getUserById(id) { return _data.users.find(u => u.id === id); },
-  getUserByEmpId(empId) { return _data.users.find(u => u.emp_id === empId); },
+  getUsers() { return _data.users.map(({ password, ...u }) => u); },
+  getUserById(id) { const u = _data.users.find(x => x.id === id); if (!u) return null; const { password, ...safe } = u; return safe; },
+  getUserByName(name) { const u = _data.users.find(x => x.name === name); if (!u) return null; const { password, ...safe } = u; return safe; },
   getUsersRaw() { return _data.users; },
+
+  updateUserProfile(id, profileData) {
+    const u = _data.users.find(x => x.id === id);
+    if (!u) return null;
+    u.profile = { ...u.profile, ...profileData };
+    queries._persist();
+    const { password, ...safe } = u;
+    return safe;
+  },
 
   saveChat(userId, role, content) {
     _data.chat_history.push({ id: uuid(), user_id: userId, role, content, created_at: new Date().toISOString() });
@@ -119,52 +176,68 @@ const queries = {
     return _data.chat_history.filter(c => c.user_id === userId).slice(-limit);
   },
 
-  getSprints() { return [..._data.sprints].sort((a, b) => b.start_date.localeCompare(a.start_date)); },
-  getSprint(id) { return _data.sprints.find(s => s.id === id); },
-  createSprint(data) {
-    const sprint = {
-      id: uuid(), name: data.name, goal: data.goal || '',
-      start_date: data.start_date, end_date: data.end_date,
-      status: data.status || 'planning', created_at: new Date().toISOString(),
-    };
-    if (sprint.status === 'active') {
-      _data.sprints.forEach(s => { if (s.status === 'active') s.status = 'completed'; });
-    }
-    _data.sprints.push(sprint);
-    queries._persist();
-    return sprint;
-  },
-  updateSprint(id, data) {
-    const sprint = _data.sprints.find(s => s.id === id);
-    if (!sprint) return null;
-    if (data.status === 'active') {
-      _data.sprints.forEach(s => { if (s.id !== id && s.status === 'active') s.status = 'completed'; });
-    }
-    Object.assign(sprint, data);
-    queries._persist();
-    return sprint;
-  },
-
   getItems(filters = {}) {
     let items = [..._data.items];
-    if (filters.sprint_id) items = items.filter(i => i.sprint_id === filters.sprint_id);
     if (filters.status) items = items.filter(i => i.status === filters.status);
     if (filters.type) items = items.filter(i => i.type === filters.type);
     if (filters.assignee) items = items.filter(i => i.assignee === filters.assignee);
     if (filters.created_by) items = items.filter(i => i.created_by === filters.created_by);
     if (filters.status_in) items = items.filter(i => filters.status_in.includes(i.status));
+    if (filters.involved) {
+      const name = filters.involved;
+      items = items.filter(i => i.assignee === name || (i.assistants || []).includes(name));
+    }
     return items.sort((a, b) => a.priority - b.priority || b.created_at.localeCompare(a.created_at));
   },
+  getMyWorkItems(userName) {
+    queries.healStuckSubmissions();
+    const active = ['todo', 'in_progress', 'blocked', 'review'];
+    return _data.items.filter(i =>
+      (i.assignee === userName || (i.assistants || []).includes(userName)) &&
+      active.includes(i.status)
+    ).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  },
+  healStuckSubmissions() {
+    let count = 0;
+    _data.items.forEach(i => {
+      if (i.status === 'submitted' && i.reviewer && i.assignee) {
+        i.status = 'in_progress';
+        i.updated_at = new Date().toISOString();
+        count++;
+      }
+    });
+    if (count) queries._persist();
+    return count;
+  },
   getItem(id) { return _data.items.find(i => i.id === id); },
+  generateReqNo() {
+    const year = new Date().getFullYear();
+    if (!_data.req_counter) _data.req_counter = {};
+    _data.req_counter[year] = (_data.req_counter[year] || 0) + 1;
+    return `REQ-${year}-${String(_data.req_counter[year]).padStart(4, '0')}`;
+  },
   createItem(data) {
+    let status = data.status || 'in_progress';
+    // 需求提交流程：有审核人+主执行人则直接进入进行中，不经过 submitted
+    if (data.reviewer && data.assignee && status === 'submitted') {
+      status = 'in_progress';
+    }
+    const reqNo = (status === 'submitted' || data.generate_req_no) ? queries.generateReqNo() : (data.req_no || null);
     const item = {
       id: uuid(), type: data.type || 'story', title: data.title,
-      description: data.description || '', status: data.status || 'backlog',
+      req_no: reqNo,
+      description: data.description || '', status,
       priority: data.priority ?? 3, story_points: data.story_points ?? 0,
-      assignee: data.assignee || null, sprint_id: data.sprint_id || null,
+      assignee: data.assignee || null,
       parent_id: data.parent_id || null, acceptance_criteria: data.acceptance_criteria || '',
       created_by: data.created_by || null,
-      ai_generated: data.ai_generated ? 1 : 0, blocked_reason: data.blocked_reason || null,
+      assistants: data.assistants || [],
+      reviewer: data.reviewer || null,
+      team_size: data.team_size || null,
+      ai_generated: data.ai_generated ? 1 : 0,
+      blocked_reason: data.blocked_reason || null,
+      blocker_type: data.blocker_type || null,
+      progress_updates: data.progress_updates || [],
       demo_url: data.demo_url || null, acceptance_status: 'pending', acceptance_feedback: null,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(), completed_at: null,
     };
@@ -178,11 +251,28 @@ const queries = {
     if (idx === -1) return null;
     const prev = { ..._data.items[idx] };
     const current = _data.items[idx];
-    const fields = ['title', 'description', 'status', 'priority', 'story_points', 'assignee', 'sprint_id', 'parent_id', 'acceptance_criteria', 'blocked_reason', 'demo_url', 'acceptance_status', 'acceptance_feedback', 'created_by'];
+    const fields = ['title', 'description', 'status', 'priority', 'story_points', 'assignee', 'assistants', 'parent_id', 'acceptance_criteria', 'blocked_reason', 'blocker_type', 'demo_url', 'acceptance_status', 'acceptance_feedback', 'created_by', 'reviewer', 'team_size', 'req_no'];
     fields.forEach(f => { if (data[f] !== undefined) current[f] = data[f]; });
-    if (data.status === 'done' && !current.completed_at) {
-      current.completed_at = new Date().toISOString();
+    if (data.status === 'terminated' && data.acceptance_status === undefined) {
+      current.acceptance_status = 'terminated';
     }
+    if (data.status === 'done' && data.acceptance_status === undefined && prev.status !== 'done') {
+      current.acceptance_status = 'accepted';
+    }
+    if (data.status === 'in_progress' && ['done', 'terminated'].includes(prev.status) && data.acceptance_status === undefined) {
+      current.acceptance_status = 'pending';
+    }
+    if (data.status === 'in_progress' && prev.status === 'blocked') {
+      if (data.blocked_reason === undefined) current.blocked_reason = null;
+      if (data.blocker_type === undefined) current.blocker_type = null;
+    }
+    if (data.status === 'done' || data.status === 'terminated') {
+      if (!current.completed_at) current.completed_at = new Date().toISOString();
+    }
+    if (data.status && !['done', 'terminated'].includes(data.status) && ['done', 'terminated'].includes(prev.status)) {
+      current.completed_at = null;
+    }
+    if (data.clear_completed) current.completed_at = null;
     current.updated_at = new Date().toISOString();
     _data.items[idx] = current;
     if (data.status && data.status !== prev.status) {
@@ -194,6 +284,53 @@ const queries = {
   deleteItem(id) {
     _data.items = _data.items.filter(i => i.id !== id);
     queries._persist();
+  },
+  addProgressUpdate(itemId, data) {
+    const item = _data.items.find(i => i.id === itemId);
+    if (!item) return null;
+    if (!item.progress_updates) item.progress_updates = [];
+    const update = {
+      id: uuid(),
+      date: data.date || new Date().toISOString().slice(0, 10),
+      user: data.user,
+      description: data.description || '',
+      blocker_type: data.blocker_type || null,
+      blocker_desc: data.blocker_desc || '',
+      created_at: new Date().toISOString(),
+    };
+    item.progress_updates.unshift(update);
+    if (item.progress_updates.length > 30) item.progress_updates = item.progress_updates.slice(0, 30);
+    if (data.blocker_type && data.blocker_type !== 'none') {
+      item.status = 'blocked';
+      item.blocker_type = data.blocker_type;
+      const typeLabels = { resource: '资源冲突', time: '时间冲突', technical: '技术问题', other: '其他' };
+      item.blocked_reason = `[${typeLabels[data.blocker_type] || data.blocker_type}] ${data.blocker_desc || data.description}`;
+    }
+    item.updated_at = new Date().toISOString();
+    queries.logActivity(itemId, 'progress', `${data.user} 提交进展${data.blocker_type && data.blocker_type !== 'none' ? ' · 卡点: ' + data.blocker_type : ''}`, data.user);
+    queries._persist();
+    return { item, update };
+  },
+  getUserProjects(userName) {
+    const items = _data.items.filter(i =>
+      ['story', 'epic', 'task', 'bug'].includes(i.type) &&
+      (i.assignee === userName || (i.assistants || []).includes(userName) || i.created_by === userName)
+    );
+    return items.map(i => ({
+      item_id: i.id,
+      task_no: i.req_no || '-',
+      task_name: i.title,
+      proposer: i.created_by || '-',
+      reviewer: i.reviewer || '-',
+      assignee: i.assignee || '-',
+      assistants: i.assistants || [],
+      status: i.status,
+      acceptance_status: i.acceptance_status,
+      acceptance_feedback: i.acceptance_feedback,
+      blocker_type: i.blocker_type,
+      blocked_reason: i.blocked_reason,
+      updated_at: i.updated_at || i.created_at,
+    })).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
   },
   logActivity(itemId, action, detail, actor = 'system') {
     _data.activity_log.push({
@@ -243,6 +380,13 @@ const queries = {
     return _data.voice_documents.slice(0, limit);
   },
   getVoiceDoc(id) { return _data.voice_documents.find(d => d.id === id); },
+  updateVoiceDoc(id, updates) {
+    const doc = _data.voice_documents.find(d => d.id === id);
+    if (!doc) return null;
+    Object.assign(doc, updates);
+    queries._persist();
+    return doc;
+  },
 };
 
 module.exports = { queries };

@@ -1,18 +1,30 @@
 const API = '/api';
-const WIP_LIMITS = { backlog: 99, todo: 5, in_progress: 4, blocked: 3, review: 3, done: 99 };
-const KANBAN_COLS = [
-  { id: 'backlog', label: 'Backlog', color: '#8899b4' },
-  { id: 'todo', label: '待办', color: '#3b82f6' },
-  { id: 'in_progress', label: '进行中', color: '#f59e0b' },
+const BLOCKER_TYPES = { none: '无卡点', resource: '资源冲突', time: '时间冲突', technical: '技术问题', other: '其他' };
+const BLOCKER_ICONS = { resource: '🔧', time: '⏰', technical: '💻', other: '⚠️' };
+const FLOW_COLS = [
+  { id: 'in_progress', label: '执行中', color: '#f59e0b' },
   { id: 'blocked', label: '阻塞', color: '#ef4444' },
-  { id: 'review', label: '待验收', color: '#a855f7' },
-  { id: 'done', label: '完成', color: '#22c55e' },
+  { id: 'done', label: '已归档', color: '#22c55e' },
+  { id: 'terminated', label: '已终止', color: '#94a3b8' },
 ];
-
-const STATUS_LABELS = Object.fromEntries(KANBAN_COLS.map(c => [c.id, c.label]));
+const ACTIVE_STATUSES = ['submitted', 'todo', 'in_progress', 'review'];
+const STATUS_LABELS = {
+  submitted: '执行中', todo: '执行中', in_progress: '执行中', review: '执行中',
+  blocked: '阻塞', done: '已归档', terminated: '已终止',
+};
 const TYPE_LABELS = { epic: 'Epic', story: 'Story', task: 'Task', bug: 'Bug' };
+const WIP_LIMITS = { in_progress: 10, blocked: 5, done: 99, terminated: 99 };
 
-let state = { items: [], sprints: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], currentView: '', activeSprint: null, user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null };
+function flowCategory(item) {
+  const status = typeof item === 'string' ? item : item?.status;
+  const acceptance = typeof item === 'object' ? item?.acceptance_status : null;
+  if (status === 'terminated' || (status === 'done' && acceptance === 'terminated')) return 'terminated';
+  if (status === 'blocked') return 'blocked';
+  if (status === 'done') return 'done';
+  return 'in_progress';
+}
+
+let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'list' };
 
 function getToken() { return localStorage.getItem('agileai_token'); }
 
@@ -26,17 +38,73 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
+function isReviewerUser() {
+  return (state.user?.capabilities || []).includes('reviewer') || state.user?.role === 'admin';
+}
+
+function isLeaderUser() {
+  return isReviewerUser();
+}
+
+function isMyWorkItem(item, userName = state.user?.name) {
+  if (!item || !userName) return false;
+  return item.assignee === userName || (item.assistants || []).includes(userName);
+}
+
+function myWorkRole(item, userName = state.user?.name) {
+  if (!item || !userName) return null;
+  if (item.assignee === userName) return 'primary';
+  if ((item.assistants || []).includes(userName)) return 'assist';
+  return null;
+}
+
+function taskPeopleText(item) {
+  const assist = (item.assistants || []).length ? ` · 其他执行: ${item.assistants.join('、')}` : '';
+  return `审核: ${item.reviewer || '-'} · 主执行: ${item.assignee || '-'}${assist}`;
+}
+
+function taskPeopleHtml(item) {
+  const assist = (item.assistants || []).length ? ` · 其他执行: ${item.assistants.map(esc).join('、')}` : '';
+  return `审核人: <strong>${esc(item.reviewer || '-')}</strong> · 主执行: <strong>${esc(item.assignee || '-')}</strong>${assist}`;
+}
+
+function workflowItems() {
+  return state.items.filter(i => i.req_no || i.reviewer);
+}
+
+function projectStatusMeta(item = {}) {
+  if (flowCategory(item) === 'terminated') return { label: '已终止', cls: 'terminated' };
+  if (item.status === 'done') return { label: '已归档', cls: 'done' };
+  if (item.status === 'blocked') return { label: '阻塞', cls: 'blocked' };
+  return { label: '执行中', cls: 'running' };
+}
+
 async function loadData() {
-  const [items, sprints, metrics, activity, insights, users] = await Promise.all([
-    api('/items'), api('/sprints'), api('/metrics'), api('/activity?limit=30'), api('/ai/insights'), api('/users'),
-  ]);
-  state = { ...state, items, sprints, metrics, activity, insights, users, activeSprint: sprints.find(s => s.status === 'active') };
-  updateSprintBadge();
+  const fetches = [
+    api('/items'), api('/metrics'), api('/activity?limit=30'), api('/ai/insights'), api('/users'),
+  ];
+  const isExecutor = (state.user?.capabilities || []).includes('executor');
+  if (isExecutor) fetches.push(api('/items/my-work').catch(() => []));
+  const results = await Promise.all(fetches);
+  const [items, metrics, activity, insights, users] = results;
+  const myWorkItems = isExecutor ? (results[5] || []) : [];
+  state = { ...state, items, myWorkItems, metrics, activity, insights, users };
+  updateWorkflowBadge();
+}
+
+function updateWorkflowBadge() {
+  const el = document.getElementById('workflowBadge');
+  if (!el) return;
+  const running = state.items.filter(i => flowCategory(i) === 'in_progress').length;
+  const blocked = state.items.filter(i => i.status === 'blocked').length;
+  const done = state.items.filter(i => flowCategory(i) === 'done').length;
+  const terminated = state.items.filter(i => flowCategory(i) === 'terminated').length;
+  el.innerHTML = `执行中 <strong>${running}</strong> · 阻塞 <strong>${blocked}</strong> · 已归档 <strong>${done}</strong> · 已终止 <strong>${terminated}</strong>`;
 }
 
 function buildNav() {
   const nav = document.getElementById('navMenu');
-  const items = state.roleConfig?.nav || [];
+  const items = state.user?.nav || state.roleConfig?.nav || [];
   nav.innerHTML = items.map(n => `<button class="nav-item" data-view="${n.id}">${n.label}</button>`).join('');
   nav.querySelectorAll('.nav-item').forEach(btn => btn.addEventListener('click', () => navigate(btn.dataset.view)));
 }
@@ -44,7 +112,7 @@ function buildNav() {
 function buildTopbar() {
   const el = document.getElementById('topbarActions');
   const role = state.user?.role;
-  if (role === 'executor') {
+  if (role === 'member' || !(state.user?.capabilities || []).includes('reviewer')) {
     el.innerHTML = `<button class="btn btn-ghost" id="btnStandup">📋 站会</button><button class="btn btn-primary" id="btnNewItem">+ 上报进度</button>`;
   } else {
     el.innerHTML = `<button class="btn btn-ghost" id="btnStandup">📋 站会摘要</button><button class="btn btn-ghost" id="btnRisks">⚠️ 风险扫描</button><button class="btn btn-primary" id="btnNewItem">+ 新建</button>`;
@@ -58,16 +126,8 @@ function setupUserCard() {
   const u = state.user;
   document.getElementById('userName').textContent = u.name;
   document.getElementById('userAvatar').textContent = u.name.slice(0, 1);
-  document.getElementById('userRole').innerHTML = `<span class="role-badge role-${u.role}">${state.roleConfig?.label || u.role}</span> · ${u.dept || ''}`;
-}
-
-function updateSprintBadge() {
-  const el = document.getElementById('activeSprintBadge');
-  if (state.activeSprint) {
-    el.innerHTML = `🏃 <strong>${state.activeSprint.name}</strong><br><span style="font-size:0.7rem">${state.activeSprint.start_date} ~ ${state.activeSprint.end_date}</span>`;
-  } else {
-    el.textContent = '无活跃 Sprint';
-  }
+  document.getElementById('userRole').innerHTML = (state.user.capabilityLabels || []).map(c => `<span class="cap-tag">${esc(c)}</span>`).join('') || `<span class="role-badge role-${state.user.role}">${esc(state.user.roleLabel)}</span>`;
+  document.getElementById('userCard').onclick = () => navigate('profile');
 }
 
 function toast(msg, type = 'success') {
@@ -90,78 +150,253 @@ function closeModal() {
 }
 
 // ── Renderers ──
+function flowListActionsHtml(item) {
+  const parts = [];
+  if (isLeaderUser()) {
+    const cat = flowCategory(item);
+    if (cat === 'in_progress') {
+      parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--danger" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">⏹ 终止执行</button>`);
+    }
+    if (cat === 'blocked') {
+      parts.push(`<button type="button" class="btn btn-primary btn-sm flow-list-action" onclick="event.stopPropagation();showReassignModal('${item.id}')">🔄 二次分配</button>`);
+    }
+    if (cat === 'done' || cat === 'terminated') {
+      parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--warn" onclick="event.stopPropagation();reviewerRevoke('${item.id}')">↩ 退回执行中</button>`);
+    }
+  }
+  if (isMyWorkItem(item) && (ACTIVE_STATUSES.includes(item.status) || item.status === 'blocked')) {
+    parts.push(`<button type="button" class="btn btn-success btn-sm flow-list-action" onclick="event.stopPropagation();completeTask('${item.id}')">✅ 任务完成</button>`);
+  }
+  if (!parts.length) return '<span class="flow-list-empty">-</span>';
+  return `<div class="flow-list-actions">${parts.join('')}</div>`;
+}
+
+function leaderActionsHtml(item) {
+  if (!isLeaderUser()) return '';
+  const cat = flowCategory(item);
+  if (cat === 'in_progress') {
+    return `<button type="button" class="btn btn-ghost btn-sm task-card-btn task-card-btn--danger" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">⏹ 终止</button>`;
+  }
+  if (cat === 'blocked') {
+    return `<button type="button" class="btn btn-primary btn-sm task-card-btn" onclick="event.stopPropagation();showReassignModal('${item.id}')">🔄 二次分配</button>`;
+  }
+  if (cat === 'done' || cat === 'terminated') {
+    return `<button type="button" class="btn btn-ghost btn-sm task-card-btn task-card-btn--warn" onclick="event.stopPropagation();reviewerRevoke('${item.id}')">↩ 退回执行中</button>`;
+  }
+  return '';
+}
+
 function renderTaskCard(item) {
-  return `<div class="task-card ${item.status === 'blocked' ? 'blocked' : ''}" draggable="true" data-id="${item.id}">
-    <span class="type-badge type-${item.type}">${TYPE_LABELS[item.type] || item.type}</span>
-    <div class="title">${esc(item.title)}</div>
-    <div class="meta">
-      ${item.story_points ? `<span class="pts">${item.story_points} SP</span>` : ''}
-      ${item.assignee ? `<span>👤 ${esc(item.assignee)}</span>` : ''}
-      ${item.ai_generated ? '<span class="ai-tag">🤖 AI</span>' : ''}
-      ${item.blocked_reason ? `<span style="color:var(--danger)">🚧 ${esc(item.blocked_reason)}</span>` : ''}
+  const updates = (item.progress_updates || []).slice(0, 2);
+  const blockerLabel = item.blocker_type ? BLOCKER_TYPES[item.blocker_type] : '';
+  const isReviewer = isReviewerUser();
+  const draggable = isReviewer ? 'true' : 'false';
+  const role = myWorkRole(item);
+  const roleBadge = role === 'primary' ? '<span class="card-role-badge">主执行</span>' :
+    role === 'assist' ? '<span class="card-role-badge card-role-badge--assist">协助</span>' : '';
+  const metaBits = [
+    item.story_points ? `<span class="pts">${item.story_points} SP</span>` : '',
+    item.blocked_reason ? `<span class="task-card-blocker">${BLOCKER_ICONS[item.blocker_type] || '🚧'} ${esc(item.blocked_reason)}</span>` : '',
+    blockerLabel && item.status === 'blocked' ? `<span class="blocker-tag">${blockerLabel}</span>` : '',
+  ].filter(Boolean).join('');
+  const actions = [
+    isMyWorkItem(item) && (ACTIVE_STATUSES.includes(item.status) || item.status === 'blocked')
+      ? `<button type="button" class="btn btn-success btn-sm task-card-btn" onclick="event.stopPropagation();completeTask('${item.id}')">✅ 完成</button>` : '',
+    leaderActionsHtml(item),
+  ].filter(Boolean).join('');
+
+  return `<div class="task-card ${item.status === 'blocked' ? 'blocked' : ''} ${isReviewer ? '' : 'readonly'}" draggable="${draggable}" data-id="${item.id}">
+    <div class="task-card-top">
+      ${item.req_no ? `<span class="req-no-tag">${esc(item.req_no)}</span>` : '<span class="task-card-spacer"></span>'}
+      <div class="task-card-badges">${roleBadge}<span class="project-status-pill ${projectStatusMeta(item).cls}">${projectStatusMeta(item).label}</span></div>
     </div>
+    <div class="task-card-title">${esc(item.title)}</div>
+    <div class="task-card-people">${taskPeopleHtml(item)}</div>
+    ${metaBits ? `<div class="task-card-meta">${metaBits}</div>` : ''}
+    ${updates.length ? `<div class="card-progress-list">
+      ${updates.map(u => `<div class="card-progress-item"><span class="prog-date">${u.date}</span> <strong>${esc(u.user)}</strong> ${esc(u.description?.slice(0, 40) || '')}</div>`).join('')}
+    </div>` : ''}
+    ${actions ? `<div class="task-card-actions">${actions}</div>` : ''}
   </div>`;
 }
 
-function renderDashboard() {
-  const m = state.metrics;
-  const pct = m.totalPoints ? Math.round((m.donePoints / m.totalPoints) * 100) : 0;
-  const statusMap = Object.fromEntries((m.byStatus || []).map(s => [s.status, s.count]));
-
-  return `
-    <div class="card-grid">
-      <div class="card stat-card blue"><div class="label">Sprint 进度</div><div class="value">${pct}%</div><div class="label">${m.donePoints}/${m.totalPoints} SP</div></div>
-      <div class="card stat-card green"><div class="label">近14天吞吐量</div><div class="value">${m.throughput}</div><div class="label">已完成项</div></div>
-      <div class="card stat-card yellow"><div class="label">平均 Lead Time</div><div class="value">${m.avgLeadTime}</div><div class="label">天</div></div>
-      <div class="card stat-card red"><div class="label">阻塞项</div><div class="value">${m.blocked}</div><div class="label">需立即处理</div></div>
-      <div class="card stat-card purple"><div class="label">进行中</div><div class="value">${statusMap.in_progress || 0}</div><div class="label">WIP 上限 ${WIP_LIMITS.in_progress}</div></div>
-    </div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
-      <div class="card">
-        <div class="section-title">状态分布</div>
-        <div class="burndown">
-          ${KANBAN_COLS.map(c => {
-            const count = statusMap[c.id] || 0;
-            const max = Math.max(...KANBAN_COLS.map(x => statusMap[x.id] || 0), 1);
-            return `<div class="burndown-bar ${c.id === 'done' ? 'done' : ''}" style="height:${Math.max(8, (count / max) * 100)}px" title="${c.label}: ${count}">
-              <span class="bar-label">${c.label}(${count})</span>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>
-      <div class="card">
-        <div class="section-title">最近活动</div>
-        <div class="activity-list">
-          ${state.activity.slice(0, 8).map(a => `
-            <div class="activity-item">
-              <span class="time">${fmtTime(a.created_at)}</span>
-              <span><strong>${esc(a.item_title || '')}</strong> ${esc(a.detail)}</span>
-            </div>
-          `).join('') || '<div class="empty-state">暂无活动</div>'}
-        </div>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:1rem">
-      <div class="section-title">最新 AI 洞察</div>
-      <div class="insight-list">
-        ${state.insights.slice(0, 3).map(i => `
-          <div class="insight-item ${i.severity}">
-            <div class="insight-title">${esc(i.title)}</div>
-            <div class="insight-time">${fmtTime(i.created_at)}</div>
-            <div class="insight-content">${esc(i.content.slice(0, 200))}</div>
-          </div>
-        `).join('') || '<div class="empty-state">点击顶部「站会摘要」或「风险扫描」生成 AI 洞察</div>'}
-      </div>
-    </div>`;
+function boardView() {
+  return 'kanban';
 }
 
-function renderKanban() {
-  const items = state.items.filter(i => i.type !== 'task' || i.status !== 'backlog');
+function kanbanBaseItems() {
+  const items = isReviewerUser()
+    ? state.items.filter(i => i.req_no || i.reviewer || i.assignee)
+    : state.items.filter(i => isMyWorkItem(i));
+  return items.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+}
+
+function applyKanbanFilters(items, excludeKey = null) {
+  const f = state.kanbanFilter || { flow: 'all', reviewer: '', executor: '' };
+  return items.filter(i => {
+    if (excludeKey !== 'flow' && f.flow !== 'all' && flowCategory(i) !== f.flow) return false;
+    if (excludeKey !== 'reviewer' && f.reviewer && i.reviewer !== f.reviewer) return false;
+    if (excludeKey !== 'executor' && f.executor && i.assignee !== f.executor && !(i.assistants || []).includes(f.executor)) return false;
+    return true;
+  });
+}
+
+function setKanbanFilter(key, value) {
+  if (!state.kanbanFilter) state.kanbanFilter = { flow: 'all', reviewer: '', executor: '' };
+  state.kanbanFilter[key] = value;
+  const bar = document.getElementById('kanban-filter-bar');
+  const base = kanbanBaseItems();
+  if (bar) bar.outerHTML = renderKanbanFilterBar(base);
+  refreshKanbanContent();
+}
+
+function renderKanbanViewTabs() {
+  const mode = state.kanbanViewMode || 'list';
+  return `<div class="kanban-view-toolbar">
+    <div class="kanban-view-tabs">
+      <button type="button" class="kanban-view-tab ${mode === 'list' ? 'active' : ''}" data-mode="list" onclick="setKanbanViewMode('list')">📋 列表视图</button>
+      <button type="button" class="kanban-view-tab ${mode === 'board' ? 'active' : ''}" data-mode="board" onclick="setKanbanViewMode('board')">📊 四列看板</button>
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm kanban-export-btn" onclick="exportKanbanList()" title="导出当前筛选结果为 CSV">📥 导出清单</button>
+  </div>`;
+}
+
+function refreshKanbanContent() {
+  const base = kanbanBaseItems();
+  const filtered = applyKanbanFilters(base);
+  const area = document.getElementById('kanban-content-area');
+  const hint = document.getElementById('kanban-list-hint');
+  if (!area) return;
+  if (state.kanbanViewMode === 'board') {
+    area.innerHTML = `<div class="kanban-page-board">${renderKanbanBoard(filtered)}</div>`;
+    if (hint) hint.textContent = `共 ${filtered.length} 项任务 · 四列看板 · ${isReviewerUser() ? '领导可拖拽移列' : '点击卡片查看详情'}`;
+    initDragDrop();
+  } else {
+    area.innerHTML = renderKanbanListHtml(filtered);
+    if (hint) hint.textContent = `共 ${filtered.length} 项任务 · 点击列表行查看详情`;
+  }
+}
+
+function setKanbanViewMode(mode) {
+  state.kanbanViewMode = mode;
+  document.querySelectorAll('.kanban-view-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.mode === mode);
+  });
+  refreshKanbanContent();
+}
+
+function renderKanbanListRow(item) {
+  const meta = projectStatusMeta(item);
+  const assist = (item.assistants || []).length ? item.assistants.map(esc).join('、') : '-';
+  return `<tr class="flow-list-row" onclick="showItemDetail('${item.id}')">
+    <td>${item.req_no ? `<span class="req-no-tag">${esc(item.req_no)}</span>` : '<span class="flow-list-empty">-</span>'}</td>
+    <td class="flow-list-title"><strong>${esc(item.title)}</strong></td>
+    <td><span class="project-status-pill ${meta.cls}">${meta.label}</span></td>
+    <td>${esc(item.created_by || '-')}</td>
+    <td>${esc(item.reviewer || '-')}</td>
+    <td>${esc(item.assignee || '-')}</td>
+    <td>${assist}</td>
+    <td class="flow-list-time">${fmtTime(item.created_at) || '-'}</td>
+    <td class="flow-list-time">${fmtTime(item.updated_at) || '-'}</td>
+    <td class="flow-list-action-cell" onclick="event.stopPropagation()">${flowListActionsHtml(item)}</td>
+  </tr>`;
+}
+
+function renderKanbanListHtml(items) {
+  if (!items.length) return '<div class="empty-state" style="padding:2rem">暂无符合条件的任务</div>';
+  return `<div class="project-table-wrap flow-list-wrap">
+    <table class="project-table flow-list-table">
+      <thead><tr>
+        <th>任务编号</th><th>任务名称</th><th>状态</th>
+        <th>需求提出人</th><th>审核人</th><th>主执行人</th><th>其他执行人</th>
+        <th>开始时间</th><th>最近更新时间</th><th>可执行操作</th>
+      </tr></thead>
+      <tbody>${items.map(renderKanbanListRow).join('')}</tbody>
+    </table>
+  </div>`;
+}
+
+function kanbanListExportRow(item) {
+  const meta = projectStatusMeta(item);
+  const assist = (item.assistants || []).length ? item.assistants.join('、') : '';
+  return [
+    item.req_no || '',
+    item.title || '',
+    meta.label,
+    item.created_by || '',
+    item.reviewer || '',
+    item.assignee || '',
+    assist,
+    fmtExportTime(item.created_at),
+    fmtExportTime(item.updated_at),
+  ];
+}
+
+function exportKanbanList() {
+  const filtered = applyKanbanFilters(kanbanBaseItems());
+  if (!filtered.length) {
+    toast('暂无数据可导出', 'error');
+    return;
+  }
+  const headers = ['任务编号', '任务名称', '状态', '需求提出人', '审核人', '主执行人', '其他执行人', '开始时间', '最近更新时间'];
+  const csv = '\uFEFF' + [headers, ...filtered.map(kanbanListExportRow)]
+    .map(row => row.map(csvCell).join(','))
+    .join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const stamp = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `流动看板清单_${stamp}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast(`已导出 ${filtered.length} 条任务`);
+}
+
+function renderKanbanFilterBar(baseItems) {
+  const f = state.kanbanFilter || { flow: 'all', reviewer: '', executor: '' };
+  const scoped = applyKanbanFilters(baseItems, 'flow');
+  const counts = { all: scoped.length };
+  FLOW_COLS.forEach(col => { counts[col.id] = scoped.filter(i => flowCategory(i) === col.id).length; });
+
+  const reviewers = [...new Set(baseItems.map(i => i.reviewer).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh'));
+  const executors = [...new Set([
+    ...baseItems.map(i => i.assignee).filter(Boolean),
+    ...baseItems.flatMap(i => i.assistants || []),
+  ])].sort((a, b) => a.localeCompare(b, 'zh'));
+
+  const flowBtns = [
+    { id: 'all', label: '全部', color: '#64748b' },
+    ...FLOW_COLS.map(c => ({ id: c.id, label: c.label, color: c.color })),
+  ].map(b => `<button type="button" class="flow-filter-btn ${f.flow === b.id ? 'active' : ''}" data-flow="${b.id}" style="--flow-color:${b.color}" onclick="setKanbanFilter('flow','${b.id}')">${b.label}<span class="flow-filter-count">${counts[b.id]}</span></button>`).join('');
+
+  const reviewerSelect = isReviewerUser() ? `
+    <div class="kanban-filter-field">
+      <label>审核人员</label>
+      <select onchange="setKanbanFilter('reviewer', this.value)">
+        <option value="">全部审核人</option>
+        ${reviewers.map(n => `<option value="${esc(n)}" ${f.reviewer === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+      </select>
+    </div>` : '';
+
+  const executorSelect = `
+    <div class="kanban-filter-field">
+      <label>执行人员</label>
+      <select onchange="setKanbanFilter('executor', this.value)">
+        <option value="">全部执行人</option>
+        ${executors.map(n => `<option value="${esc(n)}" ${f.executor === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+      </select>
+    </div>`;
+
+  return `<div class="kanban-filter-bar card" id="kanban-filter-bar">
+    <div class="flow-filter-group">${flowBtns}</div>
+    <div class="kanban-people-filters">${reviewerSelect}${executorSelect}</div>
+  </div>`;
+}
+
+function renderKanbanBoard(items) {
   return `<div class="kanban" id="kanban">
-    ${KANBAN_COLS.map(col => {
-      const cards = items.filter(i => i.status === col.id);
+    ${FLOW_COLS.map(col => {
+      const cards = items.filter(i => flowCategory(i) === col.id);
       const overWip = cards.length > WIP_LIMITS[col.id];
       return `<div class="kanban-col" data-status="${col.id}">
         <div class="kanban-col-header" style="border-top:3px solid ${col.color}">
@@ -172,120 +407,222 @@ function renderKanban() {
           </span>
         </div>
         <div class="kanban-cards" data-status="${col.id}">
-          ${cards.map(renderTaskCard).join('')}
+          ${cards.map(renderTaskCard).join('') || '<div class="kanban-empty">暂无任务</div>'}
         </div>
       </div>`;
     }).join('')}
   </div>`;
 }
 
-function renderBacklog() {
-  const items = state.items.filter(i => ['epic', 'story', 'bug'].includes(i.type)).sort((a, b) => a.priority - b.priority);
+function renderDashboard() {
+  if (isReviewerUser()) return renderLeaderDashboard();
+  return renderExecutorDashboard();
+}
+
+function renderLeaderDashboard() {
+  const m = state.metrics;
+  const counts = {
+    in_progress: state.items.filter(i => flowCategory(i) === 'in_progress').length,
+    blocked: state.items.filter(i => i.status === 'blocked').length,
+    done: state.items.filter(i => flowCategory(i) === 'done').length,
+    terminated: state.items.filter(i => flowCategory(i) === 'terminated').length,
+  };
+  const total = counts.in_progress + counts.blocked + counts.done + counts.terminated || 1;
+  const wipPct = Math.min(100, Math.round((counts.in_progress / WIP_LIMITS.in_progress) * 100));
+
+  const flowCards = FLOW_COLS.map(col => {
+    const count = counts[col.id];
+    const pct = Math.round((count / total) * 100);
+    const wipNote = col.id === 'in_progress' ? `WIP ${count}/${WIP_LIMITS.in_progress}`
+      : col.id === 'blocked' ? (count ? '需立即处理' : '流动顺畅')
+      : col.id === 'terminated' ? '领导终止' : '累计完成';
+    const icon = col.id === 'in_progress' ? '⚡' : col.id === 'blocked' ? '🚧' : col.id === 'terminated' ? '⏹' : '✅';
+    return `<div class="flow-stat-card flow-stat-${col.id}" onclick="setKanbanViewMode('board');navigate('kanban')">
+      <div class="flow-stat-icon">${icon}</div>
+      <div class="flow-stat-body">
+        <div class="flow-stat-label">${col.label}</div>
+        <div class="flow-stat-value">${count}</div>
+        <div class="flow-stat-sub">${wipNote} · 占比 ${pct}%</div>
+        <div class="flow-stat-bar"><div class="flow-stat-fill" style="width:${pct}%;background:${col.color}"></div></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const activityIcon = (action) => ({
+    progress: '📤', created: '➕', status_change: '🔄', completed: '✅',
+    dispatched: '🚀', reviewer_terminate: '⏹', reviewer_reassign: '🔁',
+    reviewer_revoke: '↩', confirmed: '✔️',
+  }[action] || '•');
+
   return `
-    <div style="margin-bottom:1rem;display:flex;gap:0.5rem">
-      <button class="btn btn-primary" onclick="showNewItemModal()">+ 新建 Story</button>
-      <button class="btn btn-ghost" onclick="navigate('ai')">🤖 AI 拆分需求</button>
-    </div>
-    <div class="backlog-list">
-      ${items.map(i => `
-        <div class="backlog-item" onclick="showItemDetail('${i.id}')">
-          <div class="priority-dot priority-${i.priority}"></div>
-          <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
-          <div class="info">
-            <div class="title">${esc(i.title)} ${i.ai_generated ? '🤖' : ''}</div>
-            <div class="desc">${esc(i.description || '')} · ${STATUS_LABELS[i.status] || i.status} · ${i.story_points || 0} SP</div>
+    <div class="dashboard">
+      <div class="dashboard-flow-strip">
+        <span class="flow-step">📤 需求提交</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step">🔍 自动审核分配</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step active">⚡ 执行中</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step warn">🚧 阻塞处理</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step done">📦 已归档</span>
+        <span class="flow-arrow">·</span>
+        <span class="flow-step terminated">⏹ 已终止</span>
+      </div>
+
+      <div class="dashboard-summary">
+        <div class="dashboard-flow-cards">${flowCards}</div>
+        <div class="dashboard-kpi-strip">
+          <div class="kpi-chip"><span class="kpi-label">近14天吞吐量</span><strong>${m.throughput}</strong><span class="kpi-unit">项</span></div>
+          <div class="kpi-chip"><span class="kpi-label">平均 Lead Time</span><strong>${m.avgLeadTime}</strong><span class="kpi-unit">天</span></div>
+          <div class="kpi-chip"><span class="kpi-label">WIP 使用率</span><strong>${wipPct}%</strong><span class="kpi-unit">${counts.in_progress}/${WIP_LIMITS.in_progress}</span></div>
+          <div class="kpi-chip ${counts.blocked ? 'kpi-alert' : ''}"><span class="kpi-label">待处理阻塞</span><strong>${counts.blocked}</strong><span class="kpi-unit">项</span></div>
+        </div>
+        <div class="dashboard-quick-actions">
+          <button class="btn btn-primary btn-sm" onclick="setKanbanViewMode('board');navigate('kanban')">📊 四列看板</button>
+          <button class="btn btn-ghost btn-sm" onclick="setKanbanViewMode('list');navigate('kanban')">📋 列表视图</button>
+          <button class="btn btn-ghost btn-sm" onclick="navigate('review')">🔍 审核备案</button>
+          <button class="btn btn-ghost btn-sm" onclick="runStandup()">📋 站会摘要</button>
+          <button class="btn btn-ghost btn-sm" onclick="runRisks()">⚠️ 风险扫描</button>
+        </div>
+      </div>
+
+      <div class="dashboard-body">
+        <div class="dashboard-panel">
+          <div class="section-title">最近动态</div>
+          <div class="activity-timeline">
+            ${state.activity.slice(0, 6).map(a => `
+              <div class="activity-timeline-item">
+                <span class="activity-icon">${activityIcon(a.action)}</span>
+                <div class="activity-body">
+                  <div class="activity-title"><strong>${esc(a.item_title || '系统')}</strong></div>
+                  <div class="activity-detail">${esc(a.detail)}</div>
+                  <div class="activity-time">${fmtTime(a.created_at)} · ${esc(a.actor || '')}</div>
+                </div>
+              </div>`).join('') || '<div class="empty-state">暂无活动</div>'}
           </div>
         </div>
-      `).join('') || '<div class="empty-state">Backlog 为空，使用 AI 助手拆分需求开始</div>'}
+
+        <div class="dashboard-panel dashboard-insights-panel">
+          <div class="section-title">最新 AI 洞察</div>
+          <div class="insight-grid">
+            ${state.insights.slice(0, 3).map(i => `
+              <div class="insight-card ${i.severity}">
+                <div class="insight-card-title">${esc(i.title)}</div>
+                <div class="insight-card-time">${fmtTime(i.created_at)}</div>
+                <div class="insight-card-content">${esc(i.content.slice(0, 120))}${i.content.length > 120 ? '…' : ''}</div>
+              </div>`).join('') || '<div class="empty-state">点击「站会摘要」或「风险扫描」生成 AI 洞察</div>'}
+          </div>
+        </div>
+      </div>
     </div>`;
 }
 
-function renderSprint() {
-  const sprint = state.activeSprint;
-  if (!sprint) {
-    return `<div class="empty-state">
-      <p>无活跃 Sprint</p>
-      <button class="btn btn-primary" style="margin-top:1rem" onclick="showNewSprintModal()">+ 创建 Sprint</button>
-    </div>`;
-  }
-  const items = state.items.filter(i => i.sprint_id === sprint.id);
-  const totalPts = items.reduce((s, i) => s + (i.story_points || 0), 0);
-  const donePts = items.filter(i => i.status === 'done').reduce((s, i) => s + (i.story_points || 0), 0);
-  const daysLeft = Math.max(0, Math.ceil((new Date(sprint.end_date) - new Date()) / 86400000));
+function renderExecutorDashboard() {
+  const m = state.metrics;
+  const myPrimary = state.items.filter(i => i.assignee === state.user?.name && ACTIVE_STATUSES.includes(i.status)).length;
+  const myAssist = state.items.filter(i => (i.assistants||[]).includes(state.user?.name) && i.assignee !== state.user?.name && (ACTIVE_STATUSES.includes(i.status) || i.status === 'blocked')).length;
+  const myDone = state.items.filter(i => i.assignee === state.user?.name && i.status === 'done').length;
+  const mySubmitted = state.items.filter(i => i.created_by === state.user?.name).length;
 
   return `
-    <div class="card" style="margin-bottom:1rem">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0.75rem">
-        <div>
-          <h2 style="margin-bottom:0.5rem">${esc(sprint.name)}</h2>
-          <p style="color:var(--muted);margin-bottom:0.75rem">🎯 ${esc(sprint.goal || '无目标')}</p>
-        </div>
-        <div style="display:flex;gap:0.5rem">
-          <button class="btn btn-ghost btn-sm" onclick="showNewSprintModal()">+ 新 Sprint</button>
-          <button class="btn btn-ghost btn-sm" onclick="closeSprint('${sprint.id}')">结束 Sprint</button>
-        </div>
+    <div class="dashboard">
+      <div class="card-grid">
+        <div class="card stat-card blue"><div class="label">主执行任务</div><div class="value">${myPrimary}</div></div>
+        <div class="card stat-card yellow"><div class="label">协助任务</div><div class="value">${myAssist}</div></div>
+        <div class="card stat-card green"><div class="label">已完成</div><div class="value">${myDone}</div></div>
+        <div class="card stat-card purple"><div class="label">我提交的</div><div class="value">${mySubmitted}</div></div>
       </div>
-      <div style="display:flex;gap:2rem;font-size:0.88rem;flex-wrap:wrap">
-        <span>📅 ${sprint.start_date} ~ ${sprint.end_date}</span>
-        <span>⏳ 剩余 ${daysLeft} 天</span>
-        <span>📊 ${donePts}/${totalPts} SP (${totalPts ? Math.round(donePts/totalPts*100) : 0}%)</span>
+      <div class="dashboard-kpi-strip">
+        <div class="kpi-chip"><span class="kpi-label">近14天吞吐量</span><strong>${m.throughput}</strong><span class="kpi-unit">项</span></div>
+        <div class="kpi-chip"><span class="kpi-label">平均 Lead Time</span><strong>${m.avgLeadTime}</strong><span class="kpi-unit">天</span></div>
       </div>
-      <div style="margin-top:0.75rem;height:8px;background:var(--bg);border-radius:4px;overflow:hidden">
-        <div style="height:100%;width:${totalPts ? donePts/totalPts*100 : 0}%;background:linear-gradient(90deg,var(--accent),var(--success));border-radius:4px;transition:width 0.5s"></div>
+      <div class="dashboard-quick-actions" style="margin-top:0.5rem">
+        <button class="btn btn-primary btn-sm" onclick="navigate('mywork')">💼 我的工作台</button>
+        <button class="btn btn-ghost btn-sm" onclick="navigate('submit')">📤 需求提交</button>
       </div>
-    </div>
-    <div class="section-title">Sprint Backlog (${items.length} 项)</div>
-    <div class="backlog-list">
-      ${items.map(i => `
-        <div class="backlog-item" onclick="showItemDetail('${i.id}')">
-          <div class="priority-dot priority-${i.priority}"></div>
-          <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
-          <div class="info">
-            <div class="title">${esc(i.title)}</div>
-            <div class="desc">${STATUS_LABELS[i.status]} · ${i.story_points || 0} SP</div>
-          </div>
-        </div>
-      `).join('') || '<div class="empty-state">Sprint Backlog 为空</div>'}
-    </div>
-    <div style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
-      <button class="btn btn-ghost" onclick="runRetro()">📊 生成 Sprint Retro 报告</button>
     </div>`;
+}
+
+function renderKanban() {
+  if (!state.kanbanFilter) state.kanbanFilter = { flow: 'all', reviewer: '', executor: '' };
+  if (!state.kanbanViewMode) state.kanbanViewMode = 'list';
+  const base = kanbanBaseItems();
+  const filtered = applyKanbanFilters(base);
+  const isBoard = state.kanbanViewMode === 'board';
+
+  const leaderHeader = isReviewerUser() ? `
+    <div class="kanban-page-header">
+      <p class="dashboard-kanban-hint">列表视图与四列看板可切换，支持按状态与人员筛选</p>
+      <div class="dashboard-quick-actions dashboard-quick-actions--inline">
+        <button class="btn btn-ghost btn-sm" onclick="navigate('dashboard')">📊 管理看板</button>
+        <button class="btn btn-ghost btn-sm" onclick="navigate('review')">🔍 审核备案</button>
+        <button class="btn btn-ghost btn-sm" onclick="runStandup()">📋 站会摘要</button>
+        <button class="btn btn-ghost btn-sm" onclick="runRisks()">⚠️ 风险扫描</button>
+      </div>
+    </div>` : `
+    <div class="kanban-lock-note">仅显示与您相关的任务。可切换列表或四列看板查看，请在工作台提交进展。</div>`;
+
+  const content = isBoard
+    ? `<div class="kanban-page-board">${renderKanbanBoard(filtered)}</div>`
+    : renderKanbanListHtml(filtered);
+  const hintText = isBoard
+    ? `共 ${filtered.length} 项任务 · 四列看板 · ${isReviewerUser() ? '领导可拖拽移列' : '点击卡片查看详情'}`
+    : `共 ${filtered.length} 项任务 · 点击列表行查看详情`;
+
+  return `${leaderHeader}
+    ${renderKanbanViewTabs()}
+    ${renderKanbanFilterBar(base)}
+    <div id="kanban-content-area">${content}</div>
+    <p class="flow-list-hint" id="kanban-list-hint">${hintText}</p>`;
 }
 
 function renderAcceptance() {
-  const items = state.items.filter(i => i.status === 'review');
-  if (!items.length) return '<div class="empty-state">✅ 当前无待验收项<br><span style="font-size:0.85rem">将看板中的任务拖入「待验收」列即可</span></div>';
-  return items.map(i => `
-    <div class="accept-card">
+  const items = isLeaderUser()
+    ? state.items.filter(i => i.status === 'done')
+    : state.items.filter(i => i.status === 'done' && i.reviewer === state.user?.name);
+  if (!items.length) return `<div class="empty-state">✅ 当前无已归档任务<br><span style="font-size:0.85rem">执行人员标记任务完成后自动归档，领导可在流动看板或此处退回执行中</span></div>`;
+  return `
+    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">已归档任务查看。领导可将任务退回执行中。</p>
+    ${items.map(i => {
+    const updates = (i.progress_updates || []).slice(0, 5);
+    return `<div class="accept-card">
+      ${i.req_no ? `<span class="req-no-tag">${esc(i.req_no)}</span> ` : ''}
       <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
+      <span class="project-status-pill ${projectStatusMeta(i).cls}">${projectStatusMeta(i).label}</span>
       <h3>${esc(i.title)}</h3>
       <p style="color:var(--muted);font-size:0.85rem">${esc(i.description || '')}</p>
-      ${i.demo_url ? `<p>🔗 Demo: <a href="${esc(i.demo_url)}" target="_blank" style="color:var(--accent)">${esc(i.demo_url)}</a></p>` : ''}
+      <p style="font-size:0.82rem">${taskPeopleHtml(i)}</p>
+      ${updates.length ? `<div class="section-title" style="font-size:0.82rem;margin-top:0.5rem">任务进展记录</div>
+        <div style="font-size:0.82rem;max-height:120px;overflow-y:auto;margin-bottom:0.75rem">
+          ${updates.map(u => `<div style="padding:0.3rem 0;border-bottom:1px solid var(--border)"><strong>${u.date}</strong> ${esc(u.user)}: ${esc(u.description)}</div>`).join('')}
+        </div>` : ''}
       <div class="criteria"><strong>验收标准:</strong>\n${esc(i.acceptance_criteria || '无')}</div>
       <div class="accept-actions">
-        <button class="btn btn-success btn-sm" onclick="acceptItem('${i.id}', 'accepted')">✅ 通过验收</button>
-        <button class="btn btn-danger btn-sm" onclick="rejectItem('${i.id}')">❌ 打回修改</button>
+        <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:var(--warning,#f59e0b);color:var(--warning,#f59e0b)">↩ 退回执行中</button>
       </div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('')}`;
 }
 
 function renderAI() {
-  const showSplit = state.user?.role !== 'executor';
+  const showSplit = (state.user?.capabilities || []).includes('reviewer');
+  const ai = state.aiStatus || {};
   return `
+    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">管理端 AI 工具：需求拆分、站会摘要、风险扫描。需求提交请使用「需求提交」页面。</p>
     <div class="ai-panel">
       ${showSplit ? `<div class="ai-card">
         <h3>🧠 AI 需求拆分 ${state.llmEnabled ? '<span class="llm-tag">LLM</span>' : ''}</h3>
-        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem">自然语言需求 → Epic + Story + Task</p>
-        <div class="form-group"><textarea id="aiRequirement" placeholder="描述你的需求..."></textarea></div>
+        <p style="color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem">输入文字 → Epic + Story + Task</p>
+        <div class="form-group"><textarea id="aiRequirement" placeholder="描述需求内容..."></textarea></div>
         <button class="btn btn-primary" onclick="runSplit()">🚀 AI 拆分并创建</button>
         <div class="ai-result" id="aiSplitResult" style="display:none"></div>
       </div>` : ''}
       <div class="ai-card" style="${showSplit ? '' : 'grid-column:1/-1'}">
-        <h3>💬 AI 智能协作者 ${state.llmEnabled ? '<span class="llm-tag">LLM</span>' : '<span class="llm-tag local">本地</span>'}</h3>
+        <h3>💬 AI 管理协作者 ${state.llmEnabled ? '<span class="llm-tag">Agent</span>' : '<span class="llm-tag local">本地</span>'}</h3>
         <div class="chat-box" id="chatBox">
           <div class="chat-messages" id="chatMessages">
-            <div class="chat-msg assistant">你好 ${esc(state.user?.name)}！我是 AgileAI 协作者，可以帮你分析任务、评估风险、规划 Sprint。</div>
+            <div class="chat-msg assistant">你好 ${esc(state.user?.name)}！我可以帮你分析任务、评估风险、查看阻塞项。</div>
           </div>
           <div class="chat-input-row">
             <input id="chatInput" placeholder="问我 anything：任务进度、风险分析、拆分建议..." onkeydown="if(event.key==='Enter')sendChat()">
@@ -293,11 +630,11 @@ function renderAI() {
           </div>
         </div>
         <div style="display:flex;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap">
-          <button class="btn btn-ghost btn-sm" onclick="quickChat('我当前有哪些任务？')">我的任务</button>
-          <button class="btn btn-ghost btn-sm" onclick="quickChat('分析当前项目风险')">风险分析</button>
+          <button class="btn btn-ghost btn-sm" onclick="quickChat('分析当前项目风险并给出行动项')">风险分析</button>
           <button class="btn btn-ghost btn-sm" onclick="runStandup()">站会摘要</button>
           <button class="btn btn-ghost btn-sm" onclick="runRisks()">风险扫描</button>
-          ${showSplit ? '<button class="btn btn-ghost btn-sm" onclick="runRetro()">Retro</button>' : ''}
+          ${showSplit ? '<button class="btn btn-ghost btn-sm" onclick="runReviewReport()">回顾报告</button>' : ''}
+          <button class="btn btn-ghost btn-sm" onclick="sendDeepChat()">🧠 深度推理</button>
         </div>
       </div>
       ${showSplit ? `<div class="ai-card" style="grid-column:1/-1">
@@ -306,92 +643,315 @@ function renderAI() {
           ${state.insights.map(i => `<div class="insight-item ${i.severity}"><div class="insight-title">${esc(i.title)}</div><div class="insight-time">${fmtTime(i.created_at)} · ${i.type}</div><div class="insight-content">${esc(i.content)}</div></div>`).join('') || '<div class="empty-state">暂无</div>'}
         </div>
       </div>` : ''}
-    </div>`;
+    </div>
+    <p style="font-size:0.78rem;color:var(--muted);margin-top:0.75rem">引擎: ${ai.llm ? `🧠 ${ai.llm.provider}` : '未配置'}</p>`;
 }
 
 function renderMyWork() {
-  const mine = state.items.filter(i => i.assignee === state.user.name);
-  const active = mine.filter(i => ['todo', 'in_progress', 'blocked', 'review'].includes(i.status));
-  const done = mine.filter(i => i.status === 'done');
+  const myItems = (state.myWorkItems?.length ? state.myWorkItems : state.items.filter(i =>
+    (i.assignee === state.user.name || (i.assistants || []).includes(state.user.name)) && (ACTIVE_STATUSES.includes(i.status) || i.status === 'blocked')
+  ));
+  const primary = myItems.filter(i => i.assignee === state.user.name);
+  const assist = myItems.filter(i => (i.assistants || []).includes(state.user.name) && i.assignee !== state.user.name);
+  const done = state.items.filter(i => i.assignee === state.user.name && i.status === 'done');
   const submitted = state.items.filter(i => i.created_by === state.user.name);
+
+  const renderWorkCard = (i, role) => {
+    const latest = (i.progress_updates || [])[0];
+    const roleLabel = role === 'primary' ? '主执行' : '协助';
+    const roleCls = role === 'primary' ? 'type-story' : 'type-task';
+    return `<div class="card progress-card" style="margin-bottom:0.75rem">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.5rem">
+        <div>
+          ${i.req_no ? `<span class="req-no-tag" style="margin-right:0.35rem">${esc(i.req_no)}</span>` : ''}
+          <span class="type-badge ${roleCls}">${roleLabel}</span>
+          <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
+          <strong style="margin-left:0.35rem">${esc(i.title)}</strong>
+          <span style="color:var(--muted);font-size:0.82rem;margin-left:0.5rem">${STATUS_LABELS[i.status] || i.status} · ${i.story_points || 0} SP</span>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="showItemDetail('${i.id}')">详情</button>
+      </div>
+      <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.5rem">
+        审核人: <strong>${esc(i.reviewer || '-')}</strong>
+        · 主执行: <strong>${esc(i.assignee || '-')}</strong>
+        ${(i.assistants||[]).length ? `· 其他执行: ${i.assistants.map(esc).join('、')}` : ''}
+      </p>
+      ${latest ? `<p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.5rem">最近进展 (${latest.date}): ${esc(latest.description?.slice(0, 80) || '')}</p>` : ''}
+      <div class="form-group" style="margin-bottom:0.5rem"><label style="font-size:0.82rem">今日进展描述</label>
+        <textarea id="prog-desc-${i.id}" rows="2" placeholder="今天完成了什么工作..."></textarea>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-bottom:0.5rem">
+        <div class="form-group" style="margin:0"><label style="font-size:0.82rem">卡点类型</label>
+          <select id="prog-blocker-${i.id}">
+            ${Object.entries(BLOCKER_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group" style="margin:0"><label style="font-size:0.82rem">卡点说明</label>
+          <input id="prog-blocker-desc-${i.id}" placeholder="描述具体卡点...">
+        </div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="submitProgress('${i.id}')">📤 提交今日进展</button>
+      ${ACTIVE_STATUSES.includes(i.status) || i.status === 'blocked' ? `<button class="btn btn-success btn-sm" style="margin-left:0.5rem" onclick="completeTask('${i.id}')">✅ 任务完成</button>` : ''}
+    </div>`;
+  };
+
   return `
     <div class="card-grid">
-      <div class="card stat-card blue"><div class="label">我的任务</div><div class="value">${mine.length}</div></div>
-      <div class="card stat-card yellow"><div class="label">进行中</div><div class="value">${active.length}</div></div>
+      <div class="card stat-card blue"><div class="label">主执行任务</div><div class="value">${primary.length}</div></div>
+      <div class="card stat-card yellow"><div class="label">协助任务</div><div class="value">${assist.length}</div></div>
       <div class="card stat-card green"><div class="label">已完成</div><div class="value">${done.length}</div></div>
       <div class="card stat-card purple"><div class="label">我提交的</div><div class="value">${submitted.length}</div></div>
     </div>
-    <div class="section-title">待办任务</div>
-    <div class="backlog-list">
-      ${active.map(i => `<div class="backlog-item" onclick="showItemDetail('${i.id}')">
-        <div class="priority-dot priority-${i.priority}"></div>
-        <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
-        <div class="info"><div class="title">${esc(i.title)}</div><div class="desc">${STATUS_LABELS[i.status]} · ${i.story_points || 0} SP</div></div>
-      </div>`).join('') || '<div class="empty-state">暂无待办 🎉</div>'}
-    </div>
+    <div class="section-title">我负责的主执行任务 (${primary.length})</div>
+    ${primary.length ? primary.map(i => renderWorkCard(i, 'primary')).join('') : '<div class="empty-state">暂无主执行任务</div>'}
+    <div class="section-title" style="margin-top:1.5rem">我协助的任务 (${assist.length}) · 其他执行人员</div>
+    ${assist.length ? assist.map(i => renderWorkCard(i, 'assist')).join('') : '<div class="empty-state">暂无协助任务</div>'}
     <div style="margin-top:1rem;display:flex;gap:0.5rem">
-      <button class="btn btn-primary" onclick="navigate('submit')">📤 提交需求</button>
+      <button class="btn btn-primary" onclick="navigate('submit')">📤 需求提交</button>
       <button class="btn btn-ghost" onclick="quickChat('帮我规划今天的工作优先级')">🤖 AI 规划今日</button>
     </div>`;
 }
 
 function renderSubmit() {
+  const records = state.meetingRecords || [];
+  const current = records.find(r => r.id === state.currentMeetingId);
+  const ai = state.aiStatus || {};
+  const reviewers = state.users.filter(u => (u.capabilities || []).includes('reviewer'));
+  const executors = state.users.filter(u => (u.capabilities || []).includes('executor') && !(u.capabilities || []).includes('reviewer'));
   return `
-    <div class="card" style="max-width:640px">
-      <h3 style="margin-bottom:0.75rem">📤 提交需求</h3>
-      <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">提交后将进入管理员审核队列，审核通过后分配执行人。</p>
-      <div class="form-group"><label>需求标题</label><input id="reqTitle" placeholder="简要描述你的需求"></div>
-      <div class="form-group"><label>应用场景</label><textarea id="reqScene" placeholder="描述应用场景和业务目标..."></textarea></div>
-      <div class="form-group"><label>验收目标</label><textarea id="reqAccept" placeholder="期望达成什么效果？"></textarea></div>
-      <div class="form-group"><label>期望时间</label><input id="reqDeadline" type="date"></div>
-      <button class="btn btn-primary" onclick="submitRequirement()">提交需求</button>
-      <button class="btn btn-ghost" style="margin-left:0.5rem" onclick="aiAssistSubmit()">🤖 AI 辅助填写</button>
+    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">填写需求并选择审核人、主执行人及其他执行人员后提交，任务<strong>立即自动进入执行环节</strong>，执行人可在「我的工作台」查看。审核人仅做备案，必要时可驳回或终止。</p>
+    <div class="submit-workflow">
+      <div class="submit-step">
+        <h3><span class="step-num">1</span> 会议记录</h3>
+        <div class="form-group"><label>输入或粘贴会议内容</label>
+          <textarea id="meetingText" rows="5" placeholder="粘贴会议纪要、讨论记录，或口述要点...">${esc(current?.transcript || '')}</textarea>
+        </div>
+        <div class="meeting-toolbar">
+          <button class="btn btn-primary btn-sm" onclick="saveMeetingText()">💾 保存会议记录</button>
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('meetVoiceInput').click()">🎙️ 上传语音</button>
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('meetDocInput').click()">📄 上传文档</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleMeetingRecord()">🔴 现场录音</button>
+          <input type="file" id="meetVoiceInput" accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg" hidden>
+          <input type="file" id="meetDocInput" accept=".txt,.md,.pdf,.docx,text/*,application/pdf" hidden>
+        </div>
+        <div id="meetingRecordStatus" style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem"></div>
+        <div class="section-title" style="font-size:0.82rem">已保存的会议记录</div>
+        <div class="meeting-records" id="meetingRecordsList">
+          ${records.length ? records.map(r => `
+            <div class="meeting-record-item ${r.id === state.currentMeetingId ? 'active' : ''}" onclick="selectMeetingRecord('${r.id}')">
+              <div>${esc(r.title || r.summary?.slice(0, 40) || '会议记录')}</div>
+              <div class="meta">${fmtTime(r.created_at)} · ${esc(r.source_type || 'text')} ${r.status === 'parsed' ? '· ✅ 已拆解' : ''}</div>
+            </div>`).join('') : '<div class="empty-state" style="padding:0.5rem">暂无记录，请先保存或上传</div>'}
+        </div>
+        ${current ? `<div class="meeting-preview" id="meetingPreview">${esc((current.transcript || current.document || '').slice(0, 800))}</div>` : ''}
+        <button class="btn btn-primary" style="width:100%;margin-top:0.75rem" onclick="parseMeetingToForm()" ${!state.currentMeetingId ? 'disabled' : ''}>🤖 AI 拆解并填写需求表单</button>
+      </div>
+
+      <div class="submit-step">
+        <h3><span class="step-num">2</span> 需求提交（可手动修改）</h3>
+        <div class="form-group"><label>需求标题</label><input id="reqTitle" placeholder="简要描述你的需求"></div>
+        <div class="form-group"><label>应用场景</label><textarea id="reqScene" rows="3" placeholder="描述应用场景和业务目标..."></textarea></div>
+        <div class="form-group"><label>验收目标</label><textarea id="reqAccept" rows="3" placeholder="期望达成什么效果？"></textarea></div>
+        <div class="form-group"><label>期望时间</label><input id="reqDeadline" type="date"></div>
+        <div class="section-title" style="font-size:0.85rem;margin:0.75rem 0 0.5rem">人员分配</div>
+        <div class="form-group"><label>审核人</label>
+          <select id="reqReviewer" style="width:100%;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            <option value="">请选择审核人</option>
+            ${reviewers.map(r => `<option value="${esc(r.name)}">${esc(r.name)} (${esc(r.dept || '')})</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group"><label>工作需要人数</label>
+          <select id="reqTeamSize" onchange="updateExecutorLimit()" style="width:120px;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            <option value="1">1 人</option>
+            <option value="2" selected>2 人</option>
+            <option value="3">3 人</option>
+            <option value="4">4 人</option>
+            <option value="5">5 人</option>
+          </select>
+          <span style="font-size:0.78rem;color:var(--muted);margin-left:0.5rem">含主执行人和协助人员</span>
+        </div>
+        <div class="form-group"><label>主执行人员（多选第一位为主执行，其余为其他执行人员）</label>
+          <select id="reqExecutors" multiple size="5" style="width:100%;padding:0.35rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            ${executors.map(e => `<option value="${esc(e.name)}">${esc(e.name)} (${esc(e.dept || '')})</option>`).join('')}
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="submitRequirement()">📤 提交需求</button>
+        <p style="font-size:0.72rem;color:var(--muted);margin-top:0.5rem">选择审核人和执行人员后将自动审核通过并分配 · 引擎: ${ai.llm ? ai.llm.provider : '未配置'}</p>
+      </div>
     </div>
-    <div class="section-title">我提交的需求</div>
-    <div class="backlog-list">
+
+    <div class="card submit-copilot" style="margin-top:1rem">
+      <h3>💬 AI 智能助手 <span class="llm-tag">${state.llmEnabled ? 'Agent' : '本地'}</span></h3>
+      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:0.5rem">需求填写有疑问？随时询问 AI 协作者</p>
+      <div class="chat-box">
+        <div class="chat-messages" id="submitChatMessages">
+          <div class="chat-msg assistant">你好！我可以帮你完善需求描述、补充验收标准，或根据会议记录给出建议。</div>
+        </div>
+        <div class="chat-input-row">
+          <input id="submitChatInput" placeholder="例如：帮我优化验收标准..." onkeydown="if(event.key==='Enter')sendSubmitChat()">
+          <button class="btn btn-primary btn-sm" onclick="sendSubmitChat()">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title" style="margin-top:1.5rem">我提交的需求</div>
+    <div class="item-list">
       ${state.items.filter(i => i.created_by === state.user.name).map(i => `
-        <div class="backlog-item" onclick="showItemDetail('${i.id}')">
+        <div class="item-row" onclick="showItemDetail('${i.id}')">
           <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
-          <div class="info"><div class="title">${esc(i.title)}</div><div class="desc">${STATUS_LABELS[i.status] || i.status} · 提交于 ${fmtTime(i.created_at)}</div></div>
+          <div class="info"><div class="title">${i.req_no ? `<span class="req-no-tag" style="margin-right:0.35rem">${esc(i.req_no)}</span>` : ''}${esc(i.title)}</div><div class="desc">${STATUS_LABELS[i.status] || i.status} · ${taskPeopleText(i)} · ${fmtTime(i.created_at)}</div></div>
         </div>`).join('') || '<div class="empty-state">暂无提交记录</div>'}
     </div>`;
 }
 
 function renderReview() {
-  const pending = state.items.filter(i => i.status === 'submitted' || (i.status === 'backlog' && !i.assignee && i.created_by));
-  const executors = state.users.filter(u => u.role === 'executor');
-  return `
-    <div class="section-title">待审核需求 (${pending.length})</div>
-    ${pending.length ? pending.map(i => `
-      <div class="accept-card">
+  const myReview = isLeaderUser()
+    ? state.items.filter(i => i.reviewer || i.req_no)
+    : state.items.filter(i => i.reviewer === state.user?.name);
+  const active = myReview.filter(i => flowCategory(i) === 'in_progress');
+  const blocked = myReview.filter(i => i.status === 'blocked');
+  const completed = myReview.filter(i => flowCategory(i) === 'done');
+  const terminated = myReview.filter(i => flowCategory(i) === 'terminated');
+
+  const renderReviewCard = (i, mode = 'view') => {
+    const updates = (i.progress_updates || []).slice(0, 3);
+    return `<div class="accept-card" id="review-${i.id}">
+      <div style="display:flex;justify-content:space-between;align-items:center">
         <span class="type-badge type-${i.type}">${TYPE_LABELS[i.type]}</span>
-        <h3>${esc(i.title)}</h3>
-        <p style="color:var(--muted);font-size:0.85rem">${esc(i.description || '')}</p>
-        <p style="font-size:0.82rem">提交人: <strong>${esc(i.created_by || '未知')}</strong> · ${i.story_points || 0} SP</p>
-        <div class="accept-actions">
-          <select id="assign-${i.id}" style="padding:0.35rem 0.5rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-right:0.5rem">
-            <option value="">选择执行人</option>
-            ${executors.map(e => `<option value="${esc(e.name)}">${esc(e.name)}</option>`).join('')}
-          </select>
-          <button class="btn btn-ghost btn-sm" onclick="aiAssign('${i.id}')">🤖 AI推荐</button>
-          <button class="btn btn-success btn-sm" onclick="reviewItem('${i.id}','approve')">✅ 通过并分配</button>
-          <button class="btn btn-danger btn-sm" onclick="reviewItem('${i.id}','reject')">❌ 驳回</button>
-        </div>
-      </div>`).join('') : '<div class="empty-state">✅ 无待审核需求</div>'}`;
+        ${i.req_no ? `<span class="req-no-tag">${esc(i.req_no)}</span>` : ''}
+        <span class="project-status-pill ${projectStatusMeta(i).cls}">${projectStatusMeta(i).label}</span>
+      </div>
+      <h3>${esc(i.title)}</h3>
+      <p style="color:var(--muted);font-size:0.85rem">${esc(i.description || '')}</p>
+      <p style="font-size:0.82rem">提交人: <strong>${esc(i.created_by || '未知')}</strong> · ${taskPeopleHtml(i)}</p>
+      ${i.blocked_reason ? `<p style="color:var(--danger);font-size:0.82rem">${BLOCKER_ICONS[i.blocker_type] || '🚧'} ${esc(i.blocked_reason)}</p>` : ''}
+      ${updates.length ? `<div style="font-size:0.82rem;max-height:80px;overflow-y:auto;margin:0.5rem 0">
+        ${updates.map(u => `<div style="padding:0.2rem 0;border-bottom:1px solid var(--border)"><strong>${u.date}</strong> ${esc(u.user)}: ${esc(u.description?.slice(0, 60) || '')}</div>`).join('')}
+      </div>` : ''}
+      <div class="accept-actions" style="flex-wrap:wrap;gap:0.5rem">
+        ${mode === 'active' && isLeaderUser() ? `
+          <button class="btn btn-ghost btn-sm" onclick="reviewerTerminate('${i.id}')" style="border-color:var(--danger);color:var(--danger)">⏹ 终止</button>
+        ` : ''}
+        ${mode === 'blocked' && isLeaderUser() ? `
+          <button class="btn btn-primary btn-sm" onclick="showReassignModal('${i.id}')">🔄 二次分配</button>
+        ` : ''}
+        ${mode === 'completed' && isLeaderUser() ? `
+          <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:var(--warning,#f59e0b);color:var(--warning,#f59e0b)">↩ 退回执行中</button>
+        ` : ''}
+        ${mode === 'terminated' && isLeaderUser() ? `
+          <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:var(--warning,#f59e0b);color:var(--warning,#f59e0b)">↩ 退回执行中</button>
+        ` : ''}
+      </div>
+    </div>`;
+  };
+
+  return `
+    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">领导审核备案：查看任务执行情况，对<strong>执行中</strong>任务终止、<strong>阻塞</strong>任务二次分配、<strong>已归档/已终止</strong>任务退回执行中。</p>
+    <div class="section-title">执行中 (${active.length})</div>
+    ${active.length ? active.map(i => renderReviewCard(i, 'active')).join('') : '<div class="empty-state">暂无执行中任务</div>'}
+    <div class="section-title" style="margin-top:1.5rem">阻塞 (${blocked.length})</div>
+    ${blocked.length ? blocked.map(i => renderReviewCard(i, 'blocked')).join('') : '<div class="empty-state">暂无阻塞任务</div>'}
+    <div class="section-title" style="margin-top:1.5rem">已归档 (${completed.length})</div>
+    ${completed.length ? completed.map(i => renderReviewCard(i, 'completed')).join('') : '<div class="empty-state">暂无已归档任务</div>'}
+    <div class="section-title" style="margin-top:1.5rem">已终止 (${terminated.length})</div>
+    ${terminated.length ? terminated.map(i => renderReviewCard(i, 'terminated')).join('') : '<div class="empty-state">暂无已终止任务</div>'}`;
+}
+
+function renderProfile() {
+  const uid = state.profileUserId || state.user?.id;
+  const isSelf = uid === state.user?.id;
+  const u = state.profileUser || state.user;
+  const p = u?.profile || {};
+  const projects = state.userProjects || [];
+  const tasks = state.items.filter(i => i.assignee === u?.name && !['done', 'terminated'].includes(i.status));
+  const assistTasks = state.items.filter(i => (i.assistants || []).includes(u?.name));
+
+  return `
+    <div class="profile-header card">
+      <div class="profile-avatar-lg">${(u?.name || '?').slice(0,1)}</div>
+      <div>
+        <h2>${esc(u?.name)} ${isSelf ? '' : `<button class="btn btn-ghost btn-sm" onclick="state.profileUserId=null;navigate('profile')">← 我的主页</button>`}</h2>
+        <p style="color:var(--muted)">工号 ${u?.emp_id} · ${u?.dept || ''}</p>
+        <div style="margin-top:0.35rem">${(u?.capabilityLabels || []).map(c => `<span class="cap-tag">${esc(c)}</span>`).join('')}</div>
+        <p style="margin-top:0.5rem;font-size:0.85rem">状态: <strong>${{available:'🟢 空闲',limited:'🟡 有限',busy:'🔴 繁忙'}[p.availability] || '未知'}</strong> · 进行中 ${tasks.length} 项 · 协助 ${assistTasks.length} 项</p>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:1rem">
+      <div class="section-title">📂 参与任务（与流动看板实时同步）</div>
+      <div class="project-table-wrap">
+        <table class="project-table">
+          <thead><tr>
+            <th>任务编号</th><th>任务名称</th><th>需求提出人</th>
+            <th>审核人</th><th>主执行人</th><th>其他执行人</th>
+          </tr></thead>
+          <tbody>
+            ${projects.length ? projects.map(pr => `<tr onclick="showItemDetail('${pr.item_id}')" style="cursor:pointer">
+              <td>${pr.task_no !== '-' ? `<span class="req-no-tag">${esc(pr.task_no)}</span>` : '<span style="color:var(--muted)">-</span>'}</td>
+              <td><strong>${esc(pr.task_name)}</strong></td>
+              <td>${esc(pr.proposer)}</td>
+              <td>${esc(pr.reviewer)}</td>
+              <td>${esc(pr.assignee)}</td>
+              <td>${pr.assistants.length ? pr.assistants.map(esc).join('、') : '-'}</td>
+            </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--muted)">暂无参与任务</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-top:1rem;display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+      <div class="card"><div class="section-title">📋 手上任务</div>
+        ${tasks.map(t => `<div style="padding:0.4rem 0;font-size:0.85rem">• [${STATUS_LABELS[t.status] || t.status}] ${t.req_no ? esc(t.req_no) + ' ' : ''}${esc(t.title)}</div>`).join('') || '<p style="color:var(--muted)">无进行中任务</p>'}
+        ${assistTasks.length ? `<div class="section-title" style="margin-top:0.75rem">协助任务</div>${assistTasks.map(t => `<div style="padding:0.4rem 0;font-size:0.85rem">• ${t.req_no ? esc(t.req_no) + ' ' : ''}${esc(t.title)} (协助)</div>`).join('')}` : ''}
+      </div>
+      <div class="card"><div class="section-title">🚧 当前卡点</div>
+        ${projects.filter(p => p.status === 'blocked').length ? projects.filter(p => p.status === 'blocked').map(p =>
+          `<div style="padding:0.5rem 0;border-bottom:1px solid var(--border);font-size:0.85rem">
+            <strong>${esc(p.task_name)}</strong><br>
+            <span style="color:var(--danger)">${BLOCKER_ICONS[p.blocker_type] || '🚧'} ${esc(p.blocked_reason || '')}</span>
+          </div>`).join('') : '<p style="color:var(--muted)">无阻塞项 🎉</p>'}
+      </div>
+    </div>`;
+}
+
+function enhanceProfileProjects() {
+  const table = document.querySelector('.project-table');
+  if (!table) return;
+  const headerRow = table.querySelector('thead tr');
+  if (headerRow && !Array.from(headerRow.children).some(th => th.textContent.trim() === '状态')) {
+    const th = document.createElement('th');
+    th.textContent = '状态';
+    headerRow.insertBefore(th, headerRow.children[2] || null);
+  }
+  const rows = Array.from(table.querySelectorAll('tbody tr'));
+  if (!state.userProjects?.length) {
+    const emptyCell = rows[0]?.querySelector('td');
+    if (emptyCell) emptyCell.colSpan = 7;
+    return;
+  }
+  rows.forEach((row, index) => {
+    if (row.querySelector('.project-status-pill')) return;
+    const pr = state.userProjects[index];
+    if (!pr) return;
+    const meta = projectStatusMeta(pr);
+    const td = document.createElement('td');
+    td.innerHTML = `<span class="project-status-pill ${meta.cls}">${meta.label}</span>`;
+    row.insertBefore(td, row.children[2] || null);
+  });
 }
 
 function renderTeam() {
-  const roleLabels = { admin: '超级管理员', manager: '管理员', executor: '执行人员' };
   return `
-    <div class="section-title">团队成员 (${state.users.length})</div>
+    <div class="section-title">团队成员 (${state.users.length}) · 可访问个人主页</div>
     <div class="team-grid">
       ${state.users.map(u => {
-        const workload = state.items.filter(i => i.assignee === u.name && !['done','backlog'].includes(i.status)).length;
-        return `<div class="team-card">
+        const workload = state.items.filter(i => i.assignee === u.name && i.status !== 'done').length;
+        return `<div class="team-card" onclick="viewProfile('${u.id}')" style="cursor:pointer">
           <div class="team-avatar">${u.name.slice(0,1)}</div>
           <div class="team-info">
-            <div class="team-name">${esc(u.name)} <span class="role-badge role-${u.role}">${roleLabels[u.role]}</span></div>
-            <div class="team-meta">工号 ${u.emp_id} · ${u.dept || ''} · 进行中 ${workload} 项</div>
+            <div class="team-name">${esc(u.name)}</div>
+            <div class="team-meta">${(u.capabilityLabels || []).join(' · ')} · 进行中 ${workload} 项</div>
+            <div class="team-meta">工号 ${u.emp_id} · ${u.dept || ''}</div>
           </div>
         </div>`;
       }).join('')}
@@ -422,7 +982,7 @@ function renderVoice() {
         <div style="margin-top:1rem;display:flex;gap:0.5rem;justify-content:center;flex-wrap:wrap">
           <button class="btn btn-primary" id="btnRecord" onclick="toggleRecording()">🔴 开始录音</button>
           <label style="font-size:0.82rem;display:flex;align-items:center;gap:0.35rem;color:var(--muted)">
-            <input type="checkbox" id="autoCreateTasks" checked> 自动创建任务到 Backlog
+            <input type="checkbox" id="autoCreateTasks" checked> 自动创建任务到流动看板
           </label>
         </div>
         <div id="recordStatus" style="margin-top:0.5rem;font-size:0.82rem;color:var(--danger);display:none"></div>
@@ -488,8 +1048,8 @@ async function processVoiceFile(file) {
       </div>
       <div class="card" style="margin-top:1rem">
         <div class="section-title">📋 拆解结果</div><p>${esc(data.summary)}</p>
-        <div class="backlog-list" style="margin-top:0.75rem">
-          ${(data.createdItems?.stories || []).map(s => `<div class="backlog-item"><span class="type-badge type-story">Story</span><div class="info"><div class="title">${esc(s.title)}</div><div class="desc">${s.story_points||0} SP</div></div></div>`).join('')}
+        <div class="item-list" style="margin-top:0.75rem">
+          ${(data.createdItems?.stories || []).map(s => `<div class="item-row"><span class="type-badge type-story">Story</span><div class="info"><div class="title">${esc(s.title)}</div><div class="desc">${s.story_points||0} SP</div></div></div>`).join('')}
         </div>
       </div>`;
     toast('语音处理完成');
@@ -502,8 +1062,8 @@ async function processVoiceFile(file) {
 }
 
 async function toggleRecording() {
-  const btn = document.getElementById('btnRecord');
-  const status = document.getElementById('recordStatus');
+  const btn = document.getElementById('btnRecord') || document.querySelector('[onclick="toggleRecording()"]');
+  const status = document.getElementById('recordStatus') || document.getElementById('aiRecordStatus');
   if (!state.recording) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -512,7 +1072,9 @@ async function toggleRecording() {
       state.mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
       state.mediaRecorder.onstop = () => {
         const blob = new Blob(audioChunks, { type: 'audio/webm' });
-        processVoiceFile(new File([blob], `recording-${Date.now()}.webm`, { type: 'audio/webm' }));
+        const file = new File([blob], `recording-${Date.now()}.webm`, { type: 'audio/webm' });
+        if (state.currentView === 'ai') processAiVoice(file);
+        else processVoiceFile(file);
         stream.getTracks().forEach(t => t.stop());
       };
       state.mediaRecorder.start();
@@ -547,30 +1109,158 @@ function initVoiceUpload() {
   input.addEventListener('change', () => { if (input.files[0]) processVoiceFile(input.files[0]); });
 }
 
-// ── Actions ──
-async function navigate(view) {
-  state.currentView = view;
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
-  const titles = { dashboard: '仪表盘', kanban: '流动看板', backlog: 'Backlog', sprint: 'Sprint', review: '审核分配', acceptance: '验收中心', ai: 'AI 助手', mywork: '我的工作台', submit: '提交需求', team: '团队管理', voice: '语音需求' };
-  document.getElementById('pageTitle').textContent = titles[view] || view;
-  await loadData();
-  if (view === 'voice') await loadVoiceDocs();
-  const renderers = { dashboard: renderDashboard, kanban: renderKanban, backlog: renderBacklog, sprint: renderSprint, review: renderReview, acceptance: renderAcceptance, ai: renderAI, mywork: renderMyWork, submit: renderSubmit, team: renderTeam, voice: renderVoice };
-  document.getElementById('content').innerHTML = renderers[view] ? renderers[view]() : '<div class="empty-state">页面不存在</div>';
-  if (view === 'kanban') initDragDrop();
-  if (view === 'voice') initVoiceUpload();
+function initAiUpload() {
+  const voiceZone = document.getElementById('aiVoiceZone');
+  const voiceInput = document.getElementById('aiVoiceInput');
+  const docZone = document.getElementById('aiDocZone');
+  const docInput = document.getElementById('aiDocInput');
+
+  if (voiceZone && voiceInput) {
+    voiceZone.addEventListener('dragover', e => { e.preventDefault(); voiceZone.classList.add('drag-over'); });
+    voiceZone.addEventListener('dragleave', () => voiceZone.classList.remove('drag-over'));
+    voiceZone.addEventListener('drop', e => { e.preventDefault(); voiceZone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) processAiVoice(e.dataTransfer.files[0]); });
+    voiceInput.addEventListener('change', () => { if (voiceInput.files[0]) processAiVoice(voiceInput.files[0]); });
+  }
+  if (docZone && docInput) {
+    docZone.addEventListener('dragover', e => { e.preventDefault(); docZone.classList.add('drag-over'); });
+    docZone.addEventListener('dragleave', () => docZone.classList.remove('drag-over'));
+    docZone.addEventListener('drop', e => { e.preventDefault(); docZone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) processAiDocument(e.dataTransfer.files[0]); });
+    docInput.addEventListener('change', () => { if (docInput.files[0]) processAiDocument(docInput.files[0]); });
+  }
 }
 
-async function moveItem(id, newStatus) {
-  const col = KANBAN_COLS.find(c => c.id === newStatus);
-  const count = state.items.filter(i => i.status === newStatus && i.id !== id).length;
-  if (count >= WIP_LIMITS[newStatus]) {
-    toast(`${col.label} 列已达 WIP 上限 (${WIP_LIMITS[newStatus]})`, 'error');
+function showAiUploadResult(data, type) {
+  const el = document.getElementById('aiUploadResult');
+  if (!el) return;
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div class="card">
+      <h3>✅ ${type === 'voice' ? '语音' : '文档'}处理完成</h3>
+      <p style="font-size:0.85rem;color:var(--muted)">${esc(data.summary)}</p>
+      ${data.meta ? `<p style="font-size:0.78rem;color:var(--muted)">📊 ${data.meta.wordCount || 0} 字 · ${data.meta.sectionCount || 0} 章节 · ${data.analysis_mode || ''} ${data.confidence ? `· 置信度 ${Math.round(data.confidence * 100)}%` : ''}</p>` : ''}
+      ${(data.keywords || []).length ? `<p style="font-size:0.78rem">🏷️ ${data.keywords.map(k => esc(k)).join(' · ')}</p>` : ''}
+      ${(data.risks || []).length ? `<p style="font-size:0.78rem;color:var(--warning)">⚠️ ${data.risks.map(r => esc(r)).join(' · ')}</p>` : ''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:0.75rem">
+        <div><div class="section-title">📝 ${type === 'voice' ? '转写原文' : '文档内容'}</div>
+          <div class="ai-result" style="display:block;max-height:200px">${esc(data.transcript || data.text)}</div></div>
+        <div><div class="section-title">📄 需求文档</div>
+          <div class="ai-result" style="display:block;max-height:200px">${esc(data.document)}</div></div>
+      </div>
+      ${(data.createdItems?.stories || []).length ? `<p style="margin-top:0.75rem;font-size:0.85rem">已创建 <strong>${data.createdItems.stories.length}</strong> 个 Story</p>` : ''}
+      <button class="btn btn-ghost btn-sm" style="margin-top:0.5rem" onclick="navigate('kanban')">查看流动看板 →</button>
+    </div>`;
+  const req = document.getElementById('aiRequirement');
+  if (req) req.value = data.transcript || data.text || '';
+}
+
+async function processAiVoice(file) {
+  const prog = document.getElementById('aiUploadProgress');
+  prog.style.display = 'block';
+  document.getElementById('aiUploadResult').style.display = 'none';
+  toast('正在处理语音...');
+  const form = new FormData();
+  form.append('audio', file);
+  form.append('autoCreate', 'true');
+  try {
+    const res = await fetch(API + '/ai/voice/process', { method: 'POST', headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {}, body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    prog.style.display = 'none';
+    showAiUploadResult(data, 'voice');
+    toast('语音处理完成');
+  } catch (e) { prog.style.display = 'none'; toast(e.message, 'error'); }
+}
+
+async function processAiDocument(file) {
+  const prog = document.getElementById('aiUploadProgress');
+  prog.style.display = 'block';
+  document.getElementById('aiUploadResult').style.display = 'none';
+  toast('正在解析文档...');
+  const form = new FormData();
+  form.append('document', file);
+  form.append('autoCreate', 'true');
+  try {
+    const res = await fetch(API + '/ai/document/process', { method: 'POST', headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {}, body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    prog.style.display = 'none';
+    showAiUploadResult(data, 'doc');
+    toast('文档处理完成');
+  } catch (e) { prog.style.display = 'none'; toast(e.message, 'error'); }
+}
+
+// ── Actions ──
+async function navigate(view) {
+  if (view === 'voice') view = 'submit';
+  state.currentView = view;
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
+  const titles = {
+    dashboard: isReviewerUser() ? '管理看板' : '仪表盘',
+    kanban: '流动看板', review: '审核备案', acceptance: '归档查看', ai: 'AI 助手',
+    mywork: '我的工作台', submit: '需求提交', team: '团队管理', profile: '个人主页',
+  };
+  document.getElementById('pageTitle').textContent = titles[view] || view;
+  await loadData();
+  if (view === 'submit') await loadMeetingRecords();
+  if (view === 'mywork' || view === 'kanban') {
+    const isExecutor = (state.user?.capabilities || []).includes('executor');
+    if (isExecutor) {
+      try { state.myWorkItems = await api('/items/my-work'); } catch { state.myWorkItems = []; }
+    }
+  }
+  if (view === 'profile') {
+    const uid = state.profileUserId || state.user?.id;
+    state.profileUser = await api(`/users/${uid}`);
+    state.userProjects = await api(`/users/${uid}/projects`);
+  }
+  const renderers = { dashboard: renderDashboard, kanban: renderKanban, review: renderReview, acceptance: renderAcceptance, ai: renderAI, mywork: renderMyWork, submit: renderSubmit, team: renderTeam, profile: renderProfile };
+  document.getElementById('content').innerHTML = renderers[view] ? renderers[view]() : '<div class="empty-state">页面不存在</div>';
+  if (view === 'profile') enhanceProfileProjects();
+  if (view === 'kanban' && state.kanbanViewMode === 'board') initDragDrop();
+  if (view === 'submit') initSubmitPage();
+}
+
+function flowStatusBody(category, extra = {}) {
+  const statusMap = { in_progress: 'in_progress', blocked: 'blocked', done: 'done', terminated: 'terminated' };
+  const status = statusMap[category] || category;
+  const body = { status, ...extra };
+  if (category === 'terminated') body.acceptance_status = 'terminated';
+  else if (category === 'done') body.acceptance_status = 'accepted';
+  else if (category === 'in_progress') {
+    body.acceptance_status = 'pending';
+    body.clear_completed = true;
+  }
+  return body;
+}
+
+async function leaderAction(actionFn, successMsg) {
+  try {
+    await actionFn();
+    toast(successMsg);
+    await navigate(state.currentView || boardView());
+  } catch (e) {
+    toast(e.message || '操作失败', 'error');
+  }
+}
+
+async function moveItem(id, newCategory) {
+  if (!isReviewerUser()) {
+    toast('执行人员无权改动流动看板状态，请提交进展后等待领导处理', 'error');
     return;
   }
-  await api(`/items/${id}`, { method: 'PATCH', body: { status: newStatus } });
-  toast(`已移至「${col.label}」`);
-  await navigate('kanban');
+  const col = FLOW_COLS.find(c => c.id === newCategory);
+  const count = state.items.filter(i => flowCategory(i) === newCategory && i.id !== id).length;
+  if (count >= WIP_LIMITS[newCategory]) {
+    toast(`${col.label} 列已达 WIP 上限 (${WIP_LIMITS[newCategory]})`, 'error');
+    return;
+  }
+  try {
+    await api(`/items/${id}`, { method: 'PATCH', body: flowStatusBody(newCategory) });
+    toast(`已移至「${col.label}」`);
+    await navigate(state.currentView || boardView());
+  } catch (e) {
+    toast(e.message || '移动失败', 'error');
+  }
 }
 
 function initDragDrop() {
@@ -578,11 +1268,13 @@ function initDragDrop() {
   let touchDragging = false;
   let touchCard = null;
   let touchClone = null;
+  const canDrag = isReviewerUser();
 
   document.querySelectorAll('.task-card').forEach(card => {
+    card.addEventListener('click', e => { if (!touchDragging) showItemDetail(card.dataset.id); });
+    if (!canDrag) return;
     card.addEventListener('dragstart', e => { draggedId = card.dataset.id; card.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
     card.addEventListener('dragend', () => { card.classList.remove('dragging'); draggedId = null; });
-    card.addEventListener('click', e => { if (!touchDragging) showItemDetail(card.dataset.id); });
 
     card.addEventListener('touchstart', e => {
       if (e.touches.length !== 1) return;
@@ -642,38 +1334,38 @@ function initDragDrop() {
   });
 }
 
-function showNewSprintModal() {
-  const start = new Date().toISOString().slice(0, 10);
-  const end = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
-  const num = state.sprints.length + 1;
-  showModal('创建 Sprint', `
-    <div class="form-group"><label>Sprint 名称</label><input id="sName" value="Sprint ${num}"></div>
-    <div class="form-group"><label>Sprint 目标</label><textarea id="sGoal" placeholder="本迭代要达成的目标..."></textarea></div>
-    <div class="form-group"><label>开始日期</label><input id="sStart" type="date" value="${start}"></div>
-    <div class="form-group"><label>结束日期</label><input id="sEnd" type="date" value="${end}"></div>
-    <button class="btn btn-primary" style="width:100%" onclick="createSprint()">创建并激活</button>
+function showReassignModal(id) {
+  const item = state.items.find(i => i.id === id);
+  if (!item) return;
+  const executors = state.users.filter(u => (u.capabilities || []).includes('executor') && !(u.capabilities || []).includes('reviewer'));
+  showModal('二次分配 · ' + item.title, `
+    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem">当前主执行: <strong>${esc(item.assignee || '未分配')}</strong>${item.blocked_reason ? `<br>阻塞原因: ${esc(item.blocked_reason)}` : ''}</p>
+    <div class="form-group"><label>新主执行人</label>
+      <select id="reassignPrimary" style="width:100%;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+        <option value="">请选择</option>
+        ${executors.map(e => `<option value="${esc(e.name)}" ${e.name === item.assignee ? 'selected' : ''}>${esc(e.name)} (${esc(e.dept || '')})</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label>协助人员（可多选）</label>
+      <select id="reassignAssist" multiple size="4" style="width:100%;padding:0.35rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+        ${executors.map(e => `<option value="${esc(e.name)}" ${(item.assistants || []).includes(e.name) ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group"><label>备注（可选）</label><input id="reassignComment" placeholder="分配说明..."></div>
+    <button class="btn btn-primary" style="width:100%" onclick="reviewerReassign('${id}')">确认二次分配并退回执行中</button>
   `);
 }
 
-async function createSprint() {
-  const data = {
-    name: document.getElementById('sName').value,
-    goal: document.getElementById('sGoal').value,
-    start_date: document.getElementById('sStart').value,
-    end_date: document.getElementById('sEnd').value,
-    status: 'active',
-  };
-  if (!data.name.trim() || !data.start_date || !data.end_date) return toast('请填写完整信息', 'error');
-  await api('/sprints', { method: 'POST', body: data });
-  closeModal();
-  toast('Sprint 已创建');
-  await navigate('sprint');
-}
-
-async function closeSprint(id) {
-  await api(`/sprints/${id}`, { method: 'PATCH', body: { status: 'completed' } });
-  toast('Sprint 已结束');
-  await navigate('sprint');
+async function reviewerReassign(id) {
+  const assignee = document.getElementById('reassignPrimary')?.value;
+  const assistEl = document.getElementById('reassignAssist');
+  const assistants = assistEl ? Array.from(assistEl.selectedOptions).map(o => o.value).filter(v => v !== assignee) : [];
+  const comment = document.getElementById('reassignComment')?.value || '';
+  if (!assignee) return toast('请选择主执行人', 'error');
+  await leaderAction(async () => {
+    await api(`/items/${id}/reviewer-reassign`, { method: 'POST', body: { assignee, assistants, comment } });
+    closeModal();
+  }, '已二次分配，任务退回执行中');
 }
 
 function showNewItemModal() {
@@ -694,8 +1386,7 @@ async function createItem() {
     description: document.getElementById('fDesc').value,
     story_points: Number(document.getElementById('fPts').value),
     priority: Number(document.getElementById('fPriority').value),
-    sprint_id: state.activeSprint?.id,
-    status: 'backlog',
+    status: 'in_progress',
   };
   if (!data.title.trim()) return toast('请输入标题', 'error');
   await api('/items', { method: 'POST', body: data });
@@ -707,31 +1398,89 @@ async function createItem() {
 function showItemDetail(id) {
   const item = state.items.find(i => i.id === id);
   if (!item) return;
+  const updates = (item.progress_updates || []);
+  const isAdmin = state.user?.role === 'admin';
+  const canEdit = isReviewerUser();
+  const canProgress = item.assignee === state.user?.name || (item.assistants || []).includes(state.user?.name);
   showModal(item.title, `
-    <div style="margin-bottom:0.75rem"><span class="type-badge type-${item.type}">${TYPE_LABELS[item.type]}</span> <span style="color:var(--muted)">${STATUS_LABELS[item.status]}</span></div>
+    <div style="margin-bottom:0.75rem">
+      ${item.req_no ? `<span class="req-no-tag">${esc(item.req_no)}</span> ` : ''}
+      <span class="type-badge type-${item.type}">${TYPE_LABELS[item.type]}</span>
+      <span style="color:var(--muted)">${STATUS_LABELS[item.status]}</span>
+      ${myWorkRole(item) === 'primary' ? '<span class="type-badge type-story" style="margin-left:0.35rem">我的主执行</span>' : ''}
+      ${myWorkRole(item) === 'assist' ? '<span class="type-badge type-task" style="margin-left:0.35rem">我的协助</span>' : ''}
+    </div>
+    <div style="font-size:0.85rem;margin-bottom:0.75rem;padding:0.5rem;background:var(--bg);border-radius:6px">${taskPeopleHtml(item)}</div>
     <p style="color:var(--muted);margin-bottom:0.75rem">${esc(item.description || '无描述')}</p>
-    <div class="form-group"><label>状态</label><select id="eStatus">${KANBAN_COLS.map(c => `<option value="${c.id}" ${c.id === item.status ? 'selected' : ''}>${c.label}</option>`).join('')}</select></div>
+    ${item.blocked_reason ? `<p style="color:var(--danger);font-size:0.85rem;margin-bottom:0.5rem">${BLOCKER_ICONS[item.blocker_type] || '🚧'} ${esc(item.blocked_reason)}</p>` : ''}
+    <div class="form-group"><label>状态</label><select id="eStatus">${FLOW_COLS.map(c => `<option value="${c.id}" ${flowCategory(item) === c.id ? 'selected' : ''}>${c.label}</option>`).join('')}</select></div>
     <div class="form-group"><label>负责人</label><input id="eAssignee" value="${esc(item.assignee || '')}"></div>
     <div class="form-group"><label>Story Points</label><input id="ePts" type="number" value="${item.story_points || 0}"></div>
     ${item.status === 'blocked' ? `<div class="form-group"><label>阻塞原因</label><input id="eBlocked" value="${esc(item.blocked_reason || '')}"></div>` : ''}
     <div class="form-group"><label>验收标准</label><textarea id="eCriteria">${esc(item.acceptance_criteria || '')}</textarea></div>
-    <button class="btn btn-primary" style="width:100%" onclick="updateItem('${id}')">保存</button>
+    ${updates.length ? `<div class="section-title" style="font-size:0.85rem">进展记录</div>
+      <div style="max-height:120px;overflow-y:auto;font-size:0.82rem;margin-bottom:0.75rem">
+        ${updates.slice(0, 5).map(u => `<div style="padding:0.35rem 0;border-bottom:1px solid var(--border)"><strong>${u.date}</strong> ${esc(u.user)}: ${esc(u.description)}${u.blocker_type && u.blocker_type !== 'none' ? ` <span style="color:var(--danger)">[${BLOCKER_TYPES[u.blocker_type]}]</span>` : ''}</div>`).join('')}
+      </div>` : ''}
+    ${canProgress ? `<div class="section-title" style="font-size:0.85rem">提交进展</div>
+      <div class="form-group"><textarea id="modalProgDesc" rows="2" placeholder="今日进展..."></textarea></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+        <select id="modalBlockerType">${Object.entries(BLOCKER_TYPES).map(([k,v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+        <input id="modalBlockerDesc" placeholder="卡点说明">
+      </div>
+      <button class="btn btn-ghost btn-sm" style="margin:0.5rem 0" onclick="submitProgress('${id}', true)">📤 提交进展</button>
+      ${ACTIVE_STATUSES.includes(item.status) || item.status === 'blocked' ? `<button class="btn btn-success btn-sm" style="margin:0.5rem 0.5rem" onclick="completeTask('${id}')">✅ 任务完成</button>` : ''}` : ''}
+    ${canEdit ? `<button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="updateItem('${id}')">保存</button>` : ''}
+    ${isLeaderUser() && flowCategory(item) === 'in_progress' ? `
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:0.5rem;border-color:var(--danger);color:var(--danger)" onclick="reviewerTerminate('${id}')">⏹ 终止执行</button>
+    ` : ''}
+    ${isLeaderUser() && item.status === 'blocked' ? `
+      <button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="showReassignModal('${id}')">🔄 二次分配</button>
+    ` : ''}
+    ${isLeaderUser() && (item.status === 'done' || item.status === 'terminated') ? `
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:0.5rem;border-color:var(--warning,#f59e0b);color:var(--warning,#f59e0b)" onclick="reviewerRevoke('${id}')">↩ 退回执行中</button>
+    ` : ''}
+    ${isAdmin ? `<button class="btn btn-danger" style="width:100%" onclick="deleteItem('${id}')">🗑️ 删除任务（超级管理员）</button>` : ''}
   `);
+  if (!canEdit) {
+    const body = document.getElementById('modalBody');
+    const note = document.createElement('div');
+    note.className = 'readonly-note';
+    note.textContent = '执行人员请在「我的工作台」提交进展并标记完成。无权直接改动看板状态，由审核人员统一管理。';
+    body.prepend(note);
+    ['eStatus', 'eAssignee', 'ePts', 'eBlocked', 'eCriteria'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.disabled = true;
+      el.readOnly = true;
+    });
+    body.querySelectorAll('button').forEach(btn => {
+      if ((btn.getAttribute('onclick') || '').includes('updateItem(')) btn.style.display = 'none';
+    });
+  }
 }
 
 async function updateItem(id) {
-  const body = {
-    status: document.getElementById('eStatus').value,
+  if (!isReviewerUser()) {
+    toast('执行人员无权改动流动看板，请提交进展后等待领导处理', 'error');
+    return;
+  }
+  const category = document.getElementById('eStatus').value;
+  const body = flowStatusBody(category, {
     assignee: document.getElementById('eAssignee').value,
     story_points: Number(document.getElementById('ePts').value),
     acceptance_criteria: document.getElementById('eCriteria').value,
-  };
+  });
   const blocked = document.getElementById('eBlocked');
   if (blocked) body.blocked_reason = blocked.value;
-  await api(`/items/${id}`, { method: 'PATCH', body });
-  closeModal();
-  toast('已更新');
-  await navigate(state.currentView);
+  try {
+    await api(`/items/${id}`, { method: 'PATCH', body });
+    closeModal();
+    toast('已更新');
+    await navigate(state.currentView);
+  } catch (e) {
+    toast(e.message || '更新失败', 'error');
+  }
 }
 
 async function acceptItem(id, status) {
@@ -760,10 +1509,10 @@ async function runSplit() {
   const text = document.getElementById('aiRequirement')?.value;
   if (!text?.trim()) return toast('请输入需求描述', 'error');
   toast('AI 正在拆分需求...');
-  const result = await api('/ai/split-requirement', { method: 'POST', body: { text, sprint_id: state.activeSprint?.id } });
+  const result = await api('/ai/split-requirement', { method: 'POST', body: { text } });
   const el = document.getElementById('aiSplitResult');
   if (el) { el.style.display = 'block'; el.textContent = result.summary + '\n\n已创建:\n• Epic: ' + result.epic.title + '\n• Stories: ' + result.stories.map(s => s.title).join('\n• '); }
-  toast('AI 拆分完成，已加入 Backlog');
+  toast('AI 拆分完成');
   await loadData();
   document.getElementById('insightList').innerHTML = state.insights.map(i => `
     <div class="insight-item ${i.severity}"><div class="insight-title">${esc(i.title)}</div><div class="insight-time">${fmtTime(i.created_at)}</div><div class="insight-content">${esc(i.content)}</div></div>
@@ -786,26 +1535,41 @@ async function runRisks() {
   await loadData();
 }
 
-async function runRetro() {
-  toast('AI 生成 Retro 报告...');
-  const result = await api('/ai/retro', { method: 'POST' });
-  showModal(`Sprint Retro (${result.engine === 'llm' ? 'LLM' : '本地'})`, `<div class="ai-result" style="display:block;max-height:60vh">${esc(result.content)}</div>`);
+async function runReviewReport() {
+  toast('AI 生成回顾报告...');
+  const result = await api('/ai/review-report', { method: 'POST' });
+  showModal(`项目回顾 (${result.engine === 'llm' ? 'LLM' : '本地'})`, `<div class="ai-result" style="display:block;max-height:60vh">${esc(result.content)}</div>`);
   await loadData();
 }
 
-async function sendChat() {
+async function sendChat(deep = false) {
   const input = document.getElementById('chatInput');
   const q = input?.value?.trim();
   if (!q) return;
   appendChat('user', q);
   input.value = '';
   try {
-    const result = await api('/ai/copilot', { method: 'POST', body: { question: q } });
-    appendChat('assistant', result.answer, result.engine);
+    const result = await api('/ai/copilot', { method: 'POST', body: { question: q, deep } });
+    appendChat('assistant', result.answer, result.engine + (result.intent ? ` · ${result.intent}` : ''));
   } catch (e) { appendChat('assistant', '抱歉，处理失败：' + e.message); }
 }
 
-function quickChat(q) { navigate('ai').then(() => { setTimeout(() => { const el = document.getElementById('chatInput'); if (el) { el.value = q; sendChat(); } }, 300); }); }
+async function sendDeepChat() {
+  const input = document.getElementById('chatInput');
+  if (!input?.value?.trim()) { toast('请先输入问题', 'error'); return; }
+  toast('深度推理中，请稍候...');
+  await sendChat(true);
+}
+
+function quickChat(q) {
+  const hasProposer = (state.user?.capabilities || []).includes('proposer');
+  navigate(hasProposer ? 'submit' : 'ai').then(() => {
+    setTimeout(() => {
+      const el = hasProposer ? document.getElementById('submitChatInput') : document.getElementById('chatInput');
+      if (el) { el.value = q; hasProposer ? sendSubmitChat() : sendChat(); }
+    }, 300);
+  });
+}
 function appendChat(role, text, engine) {
   const box = document.getElementById('chatMessages');
   if (!box) return;
@@ -816,50 +1580,292 @@ function appendChat(role, text, engine) {
   box.scrollTop = box.scrollHeight;
 }
 
+async function loadMeetingRecords() {
+  try { state.meetingRecords = await api('/ai/meeting/records'); } catch { state.meetingRecords = []; }
+}
+
+async function saveMeetingText() {
+  const text = document.getElementById('meetingText')?.value?.trim();
+  if (!text) return toast('请输入会议记录内容', 'error');
+  setMeetingStatus('保存中...');
+  try {
+    const res = await api('/ai/meeting/save-text', { method: 'POST', body: { text } });
+    state.currentMeetingId = res.doc.id;
+    await loadMeetingRecords();
+    toast('会议记录已保存');
+    await navigate('submit');
+  } catch (e) { toast(e.message, 'error'); setMeetingStatus(''); }
+}
+
+function setMeetingStatus(msg) {
+  const el = document.getElementById('meetingRecordStatus');
+  if (el) el.textContent = msg;
+}
+
+async function selectMeetingRecord(id) {
+  state.currentMeetingId = id;
+  const rec = state.meetingRecords.find(r => r.id === id);
+  await navigate('submit');
+  if (rec) {
+    const ta = document.getElementById('meetingText');
+    if (ta) ta.value = rec.transcript || rec.document || '';
+  }
+}
+
+async function parseMeetingToForm() {
+  if (!state.currentMeetingId) return toast('请先选择或保存会议记录', 'error');
+  toast('AI 正在拆解会议记录...');
+  setMeetingStatus('AI 拆解中，请稍候...');
+  try {
+    const res = await api(`/ai/meeting/${state.currentMeetingId}/parse`, { method: 'POST' });
+    const r = res.requirement;
+    const set = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
+    set('reqTitle', r.title);
+    set('reqScene', r.scene);
+    set('reqAccept', r.acceptance);
+    set('reqDeadline', r.deadline);
+    setMeetingStatus(`✅ 已拆解 (${r.engine || 'llm'})：${r.summary || ''}`);
+    toast('AI 已自动填写需求表单，请核对后提交');
+    await loadMeetingRecords();
+  } catch (e) { toast(e.message, 'error'); setMeetingStatus('拆解失败'); }
+}
+
+async function uploadMeetingAudio(file) {
+  setMeetingStatus('语音转写中，请稍候...');
+  const form = new FormData();
+  form.append('audio', file);
+  try {
+    const res = await fetch(API + '/ai/meeting/upload-audio', { method: 'POST', headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {}, body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.currentMeetingId = data.doc.id;
+    await loadMeetingRecords();
+    toast('语音已转写并保存为会议记录');
+    await navigate('submit');
+  } catch (e) { toast(e.message, 'error'); setMeetingStatus(''); }
+}
+
+async function uploadMeetingDoc(file) {
+  setMeetingStatus('文档解析中...');
+  const form = new FormData();
+  form.append('document', file);
+  try {
+    const res = await fetch(API + '/ai/meeting/upload-doc', { method: 'POST', headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {}, body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.currentMeetingId = data.doc.id;
+    await loadMeetingRecords();
+    toast('文档已保存为会议记录');
+    await navigate('submit');
+  } catch (e) { toast(e.message, 'error'); setMeetingStatus(''); }
+}
+
+function toggleMeetingRecord() {
+  if (state.recording) {
+    state.mediaRecorder?.stop();
+    state.recording = false;
+    setMeetingStatus('');
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+    state.mediaRecorder = new MediaRecorder(stream);
+    const chunks = [];
+    state.mediaRecorder.ondataavailable = e => chunks.push(e.data);
+    state.mediaRecorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      uploadMeetingAudio(new File(chunks, 'recording.webm', { type: 'audio/webm' }));
+    };
+    state.mediaRecorder.start();
+    state.recording = true;
+    setMeetingStatus('🔴 录音中，再次点击结束...');
+  }).catch(() => toast('无法访问麦克风', 'error'));
+}
+
+function initSubmitPage() {
+  document.getElementById('meetVoiceInput')?.addEventListener('change', e => { if (e.target.files[0]) uploadMeetingAudio(e.target.files[0]); });
+  document.getElementById('meetDocInput')?.addEventListener('change', e => { if (e.target.files[0]) uploadMeetingDoc(e.target.files[0]); });
+}
+
+async function sendSubmitChat() {
+  const input = document.getElementById('submitChatInput');
+  const q = input?.value?.trim();
+  if (!q) return;
+  const box = document.getElementById('submitChatMessages');
+  const userDiv = document.createElement('div');
+  userDiv.className = 'chat-msg user';
+  userDiv.textContent = q;
+  box?.appendChild(userDiv);
+  input.value = '';
+  try {
+    const result = await api('/ai/copilot', { method: 'POST', body: { question: q } });
+    const div = document.createElement('div');
+    div.className = 'chat-msg assistant';
+    div.innerHTML = `${esc(result.answer)}<span class="engine-tag">${result.engine || ''}</span>`;
+    box?.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  } catch (e) {
+    const div = document.createElement('div');
+    div.className = 'chat-msg assistant';
+    div.textContent = '处理失败：' + e.message;
+    box?.appendChild(div);
+  }
+}
+
 async function submitRequirement() {
   const title = document.getElementById('reqTitle').value;
   const scene = document.getElementById('reqScene').value;
   const accept = document.getElementById('reqAccept').value;
   const deadline = document.getElementById('reqDeadline').value;
+  const reviewer = document.getElementById('reqReviewer')?.value;
+  const teamSize = Number(document.getElementById('reqTeamSize')?.value) || 1;
+  const execEl = document.getElementById('reqExecutors');
+  const selected = execEl ? Array.from(execEl.selectedOptions).map(o => o.value) : [];
   if (!title.trim()) return toast('请填写需求标题', 'error');
-  await api('/items', { method: 'POST', body: {
-    type: 'story', title, description: `场景: ${scene}\n验收: ${accept}\n期望: ${deadline}`,
+  if (!reviewer) return toast('请选择审核人', 'error');
+  if (!selected.length) return toast('请选择至少一名执行人员', 'error');
+  if (selected.length > teamSize) return toast(`执行人员不能超过 ${teamSize} 人`, 'error');
+  const assignee = selected[0];
+  const assistants = selected.slice(1);
+  const meetingNote = state.currentMeetingId ? `\n\n会议记录ID: ${state.currentMeetingId}` : '';
+  const item = await api('/items', { method: 'POST', body: {
+    type: 'story',
+    title, description: `场景: ${scene}\n验收: ${accept}\n期望: ${deadline}${meetingNote}`,
     acceptance_criteria: accept, story_points: 3, priority: 2,
+    reviewer, team_size: teamSize, assignee, assistants,
   }});
-  toast('需求已提交，等待管理员审核');
+  if (item.status === 'in_progress') {
+    toast(`✅ 需求 ${item.req_no || ''} 已派发，${assignee} 可在工作台查看`);
+  } else {
+    toast(`需求 ${item.req_no || ''} 提交异常（状态: ${item.status}），请重启服务后重试`, 'error');
+  }
+  state.currentMeetingId = null;
   await navigate('submit');
 }
 
-async function aiAssistSubmit() {
-  const scene = document.getElementById('reqScene').value;
-  if (!scene.trim()) return toast('请先填写应用场景', 'error');
-  toast('AI 辅助生成中...');
-  const result = await api('/ai/copilot', { method: 'POST', body: { question: `根据以下场景生成需求标题和验收标准，简洁回答：\n${scene}` } });
-  showModal('AI 辅助建议', `<div class="ai-result" style="display:block">${esc(result.answer)}</div>`);
+function updateExecutorLimit() {
+  const teamSize = Number(document.getElementById('reqTeamSize')?.value) || 1;
+  const execEl = document.getElementById('reqExecutors');
+  if (!execEl) return;
+  const selected = Array.from(execEl.selectedOptions);
+  if (selected.length > teamSize) {
+    selected.slice(teamSize).forEach(o => { o.selected = false; });
+    toast(`已限制为 ${teamSize} 人`, 'error');
+  }
+}
+
+async function completeTask(id) {
+  if (!confirm('确认标记任务完成？完成后将自动归档并通知审核人。')) return;
+  await api(`/items/${id}/complete`, { method: 'POST' });
+  toast('任务已完成，已自动归档 ✅');
+  await navigate(state.currentView);
+}
+
+async function reviewerReject(id) {
+  const comment = prompt('驳回原因（可选）：');
+  if (comment === null) return;
+  await api(`/items/${id}/reviewer-reject`, { method: 'POST', body: { comment: comment || '审核人驳回' } });
+  toast('已驳回任务');
+  await navigate('review');
+}
+
+async function reviewerTerminate(id) {
+  const comment = prompt('终止原因（可选）：');
+  if (comment === null) return;
+  if (!confirm('确认终止该任务的执行？任务将归入已终止。')) return;
+  await leaderAction(
+    () => api(`/items/${id}/reviewer-terminate`, { method: 'POST', body: { comment: comment || '领导终止执行' } }),
+    '已终止，任务已归入已终止',
+  );
+}
+
+async function reviewerRevoke(id) {
+  const comment = prompt('退回原因（可选）：');
+  if (comment === null) return;
+  if (!confirm('确认将任务退回执行中？')) return;
+  await leaderAction(
+    () => api(`/items/${id}/reviewer-revoke`, { method: 'POST', body: { comment: comment || '领导退回执行中' } }),
+    '已退回执行中',
+  );
+}
+
+async function confirmComplete(id) {
+  if (!confirm('确认该任务已完成？')) return;
+  await api(`/items/${id}/confirm-complete`, { method: 'POST' });
+  toast('已确认完成 ✅');
+  await navigate(state.currentView);
 }
 
 async function reviewItem(id, action) {
   const assignee = document.getElementById(`assign-${id}`)?.value;
-  if (action === 'approve' && !assignee) return toast('请选择执行人', 'error');
+  const assistEl = document.getElementById(`assist-${id}`);
+  const assistants = assistEl ? Array.from(assistEl.selectedOptions).map(o => o.value) : [];
+  if (action === 'approve' && !assignee) return toast('请选择主执行人', 'error');
   if (action === 'reject') {
     const comment = prompt('驳回原因：');
     if (!comment) return;
     await api(`/items/${id}/review`, { method: 'POST', body: { action, comment } });
   } else {
-    await api(`/items/${id}/review`, { method: 'POST', body: { action, assignee } });
+    await api(`/items/${id}/review`, { method: 'POST', body: { action, assignee, assistants } });
   }
   toast(action === 'approve' ? '已通过并分配' : '已驳回');
   await navigate('review');
 }
 
-async function aiAssign(id) {
-  toast('AI 分析最佳人选...');
-  const result = await api(`/items/${id}/suggest-assignee`, { method: 'POST' });
-  if (result?.assignee) {
-    const sel = document.getElementById(`assign-${id}`);
-    if (sel) sel.value = result.assignee;
-    toast(`AI 推荐: ${result.assignee} (${result.reason})`);
+async function smartAssign(id) {
+  const teamSize = Number(document.getElementById(`team-size-${id}`)?.value) || 2;
+  toast(`AI 分析最佳 ${teamSize} 人团队...`);
+  const result = await api(`/items/${id}/smart-assign`, { method: 'POST', body: { team_size: teamSize } });
+  const el = document.getElementById(`smart-result-${id}`);
+  if (el) {
+    el.style.display = 'block';
+    const scoreLines = (result.scores || []).slice(0, 5).map(s =>
+      `${esc(s.name)}: ${s.score}分 (${esc(s.reason)})`
+    ).join('<br>');
+    el.innerHTML = `<strong>🤖 推荐 ${teamSize} 人团队 (${result.engine})</strong><br>
+      主执行: <strong>${esc(result.primary)}</strong><br>
+      协助: ${(result.assistants || []).map(esc).join('、') || '无'}<br>
+      <span style="color:var(--muted)">${esc(result.reason)}</span>
+      <details style="margin-top:0.5rem;font-size:0.78rem"><summary>评分明细</summary>${scoreLines}</details>`;
   }
+  const sel = document.getElementById(`assign-${id}`);
+  if (sel && result.primary) sel.value = result.primary;
+  const assist = document.getElementById(`assist-${id}`);
+  if (assist && result.assistants) {
+    Array.from(assist.options).forEach(o => { o.selected = result.assistants.includes(o.value); });
+  }
+  toast(`推荐: ${result.primary} + ${(result.assistants||[]).length} 协助`);
+}
+
+async function submitProgress(id, fromModal = false) {
+  const description = fromModal
+    ? document.getElementById('modalProgDesc')?.value
+    : document.getElementById(`prog-desc-${id}`)?.value;
+  const blocker_type = fromModal
+    ? document.getElementById('modalBlockerType')?.value
+    : document.getElementById(`prog-blocker-${id}`)?.value;
+  const blocker_desc = fromModal
+    ? document.getElementById('modalBlockerDesc')?.value
+    : document.getElementById(`prog-blocker-desc-${id}`)?.value;
+  if (!description?.trim() && (!blocker_type || blocker_type === 'none')) {
+    return toast('请填写进展描述或选择卡点类型', 'error');
+  }
+  await api(`/items/${id}/progress`, { method: 'POST', body: { description, blocker_type, blocker_desc } });
+  toast(blocker_type && blocker_type !== 'none' ? '进展已提交，任务已标记为阻塞' : '今日进展已提交');
+  if (fromModal) closeModal();
+  await navigate(state.currentView);
+}
+
+async function deleteItem(id) {
+  if (!confirm('确定删除此任务？此操作不可恢复。')) return;
+  await api(`/items/${id}`, { method: 'DELETE' });
+  closeModal();
+  toast('任务已删除');
+  await navigate(state.currentView);
+}
+
+async function viewProfile(userId) {
+  state.profileUserId = userId;
+  await navigate('profile');
 }
 
 async function logout() {
@@ -887,11 +1893,19 @@ async function initApp() {
 // ── Utils ──
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 function fmtTime(t) { if (!t) return ''; const d = new Date(t.includes('T') ? t : t + 'Z'); return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); }
+function fmtExportTime(t) {
+  if (!t) return '';
+  const d = new Date(t.includes('T') ? t : t + 'Z');
+  return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+function csvCell(v) {
+  const s = String(v ?? '');
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
 
 // ── Init ──
 document.getElementById('modalClose').addEventListener('click', closeModal);
 document.getElementById('modalOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
-document.getElementById('activeSprintBadge').addEventListener('click', () => { if (state.roleConfig?.nav?.find(n => n.id === 'sprint')) navigate('sprint'); });
 document.getElementById('btnLogout').addEventListener('click', logout);
 
 initApp();

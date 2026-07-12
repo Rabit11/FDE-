@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FDE管理平台 · 完整开发方案</title>
+<style>
+:root {
+  --bg: #f3f7fc; --surface: #fff; --surface2: #f8fbff;
+  --border: #d8e3f0; --text: #153e75; --muted: #5a7291;
+  --accent: #2563eb; --accent-light: #eaf2ff;
+  --success: #16a34a; --warning: #d97706; --danger: #dc2626; --purple: #7c3aed;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); line-height: 1.75; font-size: 15px; }
+.hero { background: linear-gradient(135deg, #1d4ed8, #2563eb 45%, #0891b2); padding: 2.5rem 2rem; color: #fff; }
+.hero h1 { font-size: 2rem; margin-bottom: 0.4rem; }
+.hero p { opacity: 0.95; }
+.hero .meta { opacity: 0.92; font-size: 0.88rem; margin-top: 0.75rem; }
+.hero .meta span { margin-right: 1.5rem; }
+.layout { display: flex; max-width: 1320px; margin: 0 auto; }
+nav.toc { width: 250px; flex-shrink: 0; padding: 1.5rem 1rem 2rem; position: sticky; top: 0; align-self: flex-start; max-height: 100vh; overflow-y: auto; background: var(--surface); border-right: 1px solid var(--border); }
+nav.toc a { display: block; padding: 0.35rem 0.6rem; font-size: 0.82rem; color: var(--muted); text-decoration: none; border-radius: 6px; }
+nav.toc a:hover { background: var(--accent-light); color: var(--accent); }
+nav.toc .toc-title { font-size: 0.72rem; font-weight: 700; color: var(--muted); margin: 1rem 0 0.35rem 0.6rem; }
+main { flex: 1; padding: 1.5rem 2rem 3rem; min-width: 0; }
+h2 { font-size: 1.35rem; margin: 2rem 0 0.85rem; padding-bottom: 0.45rem; border-bottom: 2px solid var(--border); color: #0f2e5b; }
+h2:first-child { margin-top: 0; }
+h3 { font-size: 1.05rem; margin: 1.1rem 0 0.6rem; color: var(--accent); }
+h4 { font-size: 0.92rem; margin: 0.85rem 0 0.4rem; color: #1e40af; }
+p, li { color: #334155; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.25rem; margin-bottom: 0.85rem; box-shadow: 0 2px 8px rgba(15,46,91,0.04); }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.85rem; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.85rem; }
+@media (max-width: 960px) { .layout { flex-direction: column; } nav.toc { width: 100%; position: static; max-height: none; } .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; } }
+table { width: 100%; border-collapse: collapse; font-size: 0.84rem; margin: 0.75rem 0; }
+th, td { padding: 0.55rem 0.75rem; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { background: var(--accent-light); color: #1e3a8a; font-weight: 700; }
+tr:nth-child(even) td { background: var(--surface2); }
+.tag { display: inline-block; padding: 0.12rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; margin: 0.1rem; }
+.tag-admin { background: #fee2e2; color: #b91c1c; }
+.tag-leader { background: #fef3c7; color: #b45309; }
+.tag-exec { background: #dcfce7; color: #15803d; }
+.tag-blue { background: #dbeafe; color: #1d4ed8; }
+.tag-gray { background: #f1f5f9; color: #64748b; }
+.tag-green { background: #dcfce7; color: #15803d; }
+.tag-red { background: #fee2e2; color: #b91c1c; }
+.tag-yellow { background: #fef3c7; color: #b45309; }
+.flow { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; padding: 0.85rem 1rem; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; margin: 0.75rem 0; font-size: 0.84rem; }
+.flow-step { padding: 0.35rem 0.7rem; border-radius: 6px; background: #fff; border: 1px solid var(--border); }
+.flow-step.hl-run { background: #fef3c7; border-color: #fcd34d; font-weight: 600; }
+.flow-step.hl-block { background: #fee2e2; border-color: #fca5a5; font-weight: 600; }
+.flow-step.hl-done { background: #dcfce7; border-color: #86efac; font-weight: 600; }
+.flow-step.hl-term { background: #f1f5f9; border-color: #cbd5e1; font-weight: 600; color: #64748b; }
+.arrow { color: #94a3b8; }
+.arch { font-family: Consolas, "Courier New", monospace; font-size: 0.78rem; background: #0f172a; color: #e2e8f0; padding: 1rem 1.25rem; border-radius: 8px; overflow-x: auto; line-height: 1.55; white-space: pre; margin: 0.75rem 0; }
+.verdict { background: linear-gradient(135deg, #eff6ff, #f0fdfa); border: 1px solid #bfdbfe; border-radius: 10px; padding: 1.1rem 1.25rem; margin: 0.75rem 0; }
+.code { font-family: Consolas, monospace; font-size: 0.8rem; background: #f1f5f9; padding: 0.1rem 0.35rem; border-radius: 4px; color: #0f172a; }
+ul, ol { padding-left: 1.25rem; } li { margin-bottom: 0.3rem; }
+.footer { text-align: center; padding: 1.5rem; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--border); margin-top: 2rem; }
+.status-pill { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 0.35rem; vertical-align: middle; }
+.pill-run { background: #f59e0b; } .pill-block { background: #ef4444; } .pill-done { background: #22c55e; } .pill-term { background: #94a3b8; }
+.diagram { background: #0f172a; color: #cbd5e1; padding: 1rem; border-radius: 8px; font-family: Consolas, monospace; font-size: 0.76rem; line-height: 1.6; overflow-x: auto; white-space: pre; margin: 0.75rem 0; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>⚡ FDE管理平台 · 完整开发方案</h1>
+  <p>任务流动管理 + AI 协作者 · 基于当前代码库实现的详细技术说明</p>
+  <div class="meta">
+    <span>📍 <strong>http://localhost:3456</strong></span>
+    <span>📄 本文档：<strong>/FDE管理平台开发方案.html</strong></span>
+    <span>📅 2026-07-12</span>
+    <span>📦 v1.0.0</span>
+  </div>
+</header>
+
+<div class="layout">
+<nav class="toc">
+  <div class="toc-title">目录</div>
+  <a href="#overview">1. 平台总览</a>
+  <a href="#philosophy">2. 设计理念</a>
+  <a href="#roles">3. 角色与权限</a>
+  <a href="#workflow">4. 四态任务流转</a>
+  <a href="#kanban">5. 流动看板（双视图）</a>
+  <a href="#pages">6. 页面与导航</a>
+  <a href="#leader-actions">7. 领导操作</a>
+  <a href="#executor">8. 执行人员功能</a>
+  <a href="#submit">9. 需求提交流程</a>
+  <a href="#ai">10. AI 智能能力</a>
+  <a href="#architecture">11. 技术架构</a>
+  <a href="#api">12. API 接口</a>
+  <a href="#data">13. 数据模型</a>
+  <a href="#deploy">14. 部署与配置</a>
+  <a href="#changelog">15. 版本变更</a>
+</nav>
+
+<main>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="overview">
+  <h2>一、平台总览</h2>
+  <div class="verdict">
+    <p><strong>FDE管理平台</strong>是面向研发团队的现代化任务管理平台，以<strong>四态流动看板 + AI 协作者</strong>替代传统 FDE 审批式工单流程，实现从需求输入、任务分配、执行跟踪到归档/终止的全链路数字化。平台已<strong>完全移除</strong> Sprint / Backlog 迭代模式。</p>
+  </div>
+
+  <div class="grid-4">
+    <div class="card" style="text-align:center">
+      <div style="font-size:2rem;font-weight:800;color:#f59e0b">4</div>
+      <p style="font-size:0.85rem">流动状态<br>
+        <span class="tag tag-yellow">执行中</span>
+        <span class="tag tag-red">阻塞</span>
+        <span class="tag tag-green">已归档</span>
+        <span class="tag tag-gray">已终止</span>
+      </p>
+    </div>
+    <div class="card" style="text-align:center">
+      <div style="font-size:2rem;font-weight:800;color:var(--success)">12</div>
+      <p style="font-size:0.85rem">平台用户<br>1 超管 + 4 领导 + 7 执行</p>
+    </div>
+    <div class="card" style="text-align:center">
+      <div style="font-size:2rem;font-weight:800;color:var(--accent)">2</div>
+      <p style="font-size:0.85rem">看板视图<br>列表视图 + 四列看板</p>
+    </div>
+    <div class="card" style="text-align:center">
+      <div style="font-size:2rem;font-weight:800;color:var(--purple)">AI</div>
+      <p style="font-size:0.85rem">DeepSeek + DashScope<br>拆分 / 语音 / 分配</p>
+    </div>
+  </div>
+
+  <h3>核心能力矩阵</h3>
+  <table>
+    <tr><th>模块</th><th>功能说明</th><th>状态</th></tr>
+    <tr><td>管理看板</td><td>流程条、四态指标卡、KPI（吞吐量/Lead Time/WIP）、最近动态、AI 洞察；与流动看板<strong>独立分页</strong></td><td><span class="tag tag-green">已上线</span></td></tr>
+    <tr><td>流动看板</td><td><strong>列表视图</strong>（筛选+表格+行内操作）与<strong>四列看板</strong>（拖拽+卡片）双视图可切换</td><td><span class="tag tag-green">已上线</span></td></tr>
+    <tr><td>审核备案</td><td>按执行中/阻塞/已归档/已终止分类备案，支持领导快捷操作</td><td><span class="tag tag-green">已上线</span></td></tr>
+    <tr><td>归档查看</td><td>已归档（done）任务列表，支持退回执行中</td><td><span class="tag tag-green">已上线</span></td></tr>
+    <tr><td>需求提交</td><td>会议记录/语音/文档 → AI 拆解 → 选人 → 自动进入执行中</td><td><span class="tag tag-green">已上线</span></td></tr>
+    <tr><td>智能分配</td><td>负载 + 技能 + 可用性算法，可选 LLM 增强推荐</td><td><span class="tag tag-green">已上线</span></td></tr>
+    <tr><td>AI 助手</td><td>需求拆分、Copilot、站会摘要、风险扫描、回顾报告</td><td><span class="tag tag-green">已上线</span></td></tr>
+    <tr><td>Sprint / Backlog</td><td>迭代与待办池</td><td><span class="tag tag-gray">已移除</span></td></tr>
+  </table>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="philosophy">
+  <h2>二、设计理念</h2>
+  <h3>从 FDE 审批到价值流动</h3>
+  <table>
+    <tr><th>维度</th><th>传统 FDE</th><th>FDE管理平台</th></tr>
+    <tr><td>管理对象</td><td>审批签字、日志条数</td><td>任务价值流动速度与可视化</td></tr>
+    <tr><td>任务分类</td><td>多阶段审批队列</td><td>执行中 → 阻塞 → 已归档 / 已终止（四态）</td></tr>
+    <tr><td>领导职责</td><td>逐级审批签字</td><td>审核备案 + 流动干预（终止/二次分配/退回）</td></tr>
+    <tr><td>执行方式</td><td>填表上报</td><td>工作台提交进展，完成自动归档</td></tr>
+    <tr><td>可视化</td><td>表格工单</td><td>列表视图（多维筛选）+ 四列 Kanban（拖拽）</td></tr>
+    <tr><td>AI 角色</td><td>无</td><td>需求拆解、人员推荐、风险预警、站会生成</td></tr>
+  </table>
+
+  <h3>端到端价值流</h3>
+  <div class="flow">
+    <span class="flow-step">📤 需求提交</span><span class="arrow">→</span>
+    <span class="flow-step">🔍 选择审核人+执行人</span><span class="arrow">→</span>
+    <span class="flow-step">🚀 自动进入执行中</span><span class="arrow">→</span>
+    <span class="flow-step hl-run">⚡ 执行中</span><span class="arrow">→</span>
+    <span class="flow-step">📤 每日进展</span><span class="arrow">→</span>
+    <span class="flow-step hl-block">🚧 阻塞（可选）</span><span class="arrow">→</span>
+    <span class="flow-step hl-done">📦 已归档</span>
+    <span class="arrow">·</span>
+    <span class="flow-step hl-term">⏹ 已终止</span>
+  </div>
+  <ul>
+    <li>执行人员上报<strong>卡点</strong> → 任务自动进入<strong>阻塞</strong></li>
+    <li>领导对阻塞任务<strong>二次分配</strong> → 退回<strong>执行中</strong></li>
+    <li>领导对执行中任务<strong>终止</strong> → 进入<strong>已终止</strong>（与正常归档区分）</li>
+    <li>执行人员标记<strong>任务完成</strong> → 进入<strong>已归档</strong></li>
+    <li>领导可将已归档/已终止任务<strong>退回执行中</strong></li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="roles">
+  <h2>三、角色与权限体系</h2>
+  <p>采用 <strong>capabilities（能力标签）</strong> + <strong>role（角色层级）</strong> 双层模型，登录时动态生成侧栏导航，API 层统一鉴权。</p>
+
+  <h3>3.1 三类角色</h3>
+  <table>
+    <tr><th>层级</th><th>人员</th><th>role</th><th>权限</th></tr>
+    <tr>
+      <td><span class="tag tag-admin">超级管理员</span></td>
+      <td>admin（工号 666666）</td>
+      <td><code class="code">admin</code></td>
+      <td>全部功能；团队管理；删除任务；<code class="code">can_manage_users</code></td>
+    </tr>
+    <tr>
+      <td><span class="tag tag-leader">领导</span></td>
+      <td>曾锐、林宇飞、毛研勋、张弛</td>
+      <td><code class="code">manager</code></td>
+      <td>管理看板、流动看板、审核备案、归档查看、领导操作 API；<strong>无</strong>超管系统权限</td>
+    </tr>
+    <tr>
+      <td><span class="tag tag-exec">执行人员</span></td>
+      <td>赵立泽、王诗瑶、万贤书、刘紫薇、王紫薇、杨会冉、杨子豪</td>
+      <td><code class="code">member</code></td>
+      <td>我的工作台、流动看板（仅相关任务）、需求提交、进展上报、标记完成</td>
+    </tr>
+  </table>
+
+  <h3>3.2 能力标签</h3>
+  <table>
+    <tr><th>标识</th><th>名称</th><th>说明</th></tr>
+    <tr><td><code class="code">reviewer</code></td><td>审核人员</td><td>领导/超管；管理看板、审核备案、领导专属 API</td></tr>
+    <tr><td><code class="code">proposer</code></td><td>需求提出</td><td>全员；需求提交页</td></tr>
+    <tr><td><code class="code">executor</code></td><td>执行人员</td><td>全员；工作台、进展、完成</td></tr>
+  </table>
+
+  <h3>3.3 鉴权要点</h3>
+  <ul>
+    <li><code class="code">requirePermission</code>：<code class="code">all</code> 仅表示超管 bypass，与 <code class="code">review</code> 等并列时领导可通过 reviewer 能力访问</li>
+    <li><code class="code">checkReviewerAccess</code>：领导（<code class="code">isLeader</code>）可操作所有任务的审核类动作</li>
+    <li>流动看板 <code class="code">PATCH</code>：仅 reviewer/admin；执行人员只能提交进展</li>
+    <li><code class="code">DELETE /api/items/:id</code>：仅超级管理员</li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="workflow">
+  <h2>四、四态任务流转</h2>
+
+  <h3>4.1 UI 流动分类</h3>
+  <table>
+    <tr><th>展示分类</th><th>颜色</th><th>内部 status / 规则</th><th>WIP 上限</th></tr>
+    <tr><td><span class="status-pill pill-run"></span>执行中</td><td>#f59e0b</td><td>submitted, todo, in_progress, review</td><td>10</td></tr>
+    <tr><td><span class="status-pill pill-block"></span>阻塞</td><td>#ef4444</td><td>blocked（进展含卡点时自动设置）</td><td>5</td></tr>
+    <tr><td><span class="status-pill pill-done"></span>已归档</td><td>#22c55e</td><td>done + acceptance_status=accepted</td><td>99</td></tr>
+    <tr><td><span class="status-pill pill-term"></span>已终止</td><td>#94a3b8</td><td>terminated + acceptance_status=terminated（领导终止专用）</td><td>99</td></tr>
+  </table>
+
+  <h3>4.2 状态转换规则</h3>
+  <table>
+    <tr><th>触发动作</th><th>操作者</th><th>状态变化</th></tr>
+    <tr><td>需求提交（含审核人+执行人）</td><td>提出人</td><td>→ <code class="code">in_progress</code>，生成 REQ-YYYY-NNNN</td></tr>
+    <tr><td>提交进展（含卡点）</td><td>主执行/协助</td><td>→ <code class="code">blocked</code>，记录 blocker_type / blocked_reason</td></tr>
+    <tr><td>提交进展（无卡点）</td><td>主执行/协助</td><td>保持状态，追加 progress_updates</td></tr>
+    <tr><td>任务完成</td><td>主执行/协助</td><td>→ <code class="code">done</code>，acceptance_status=accepted</td></tr>
+    <tr><td>领导终止</td><td>领导/超管</td><td>→ <code class="code">terminated</code>（仅执行中可终止）</td></tr>
+    <tr><td>领导二次分配</td><td>领导/超管</td><td>blocked → <code class="code">in_progress</code>，更新人员，清除阻塞</td></tr>
+    <tr><td>领导退回执行中</td><td>领导/超管</td><td>done/terminated → <code class="code">in_progress</code>，清除 completed_at</td></tr>
+    <tr><td>看板拖拽 / PATCH</td><td>领导/超管</td><td>在四态间映射 status，同步 acceptance_status</td></tr>
+  </table>
+
+  <h3>4.3 任务人员字段</h3>
+  <table>
+    <tr><th>字段</th><th>说明</th></tr>
+    <tr><td><code class="code">req_no</code></td><td>需求编号 REQ-YYYY-NNNN</td></tr>
+    <tr><td><code class="code">created_by</code></td><td>需求提出人</td></tr>
+    <tr><td><code class="code">reviewer</code></td><td>审核备案负责人（领导）</td></tr>
+    <tr><td><code class="code">assignee</code></td><td>主执行人</td></tr>
+    <tr><td><code class="code">assistants[]</code></td><td>其他执行人（协助）</td></tr>
+    <tr><td><code class="code">progress_updates[]</code></td><td>进展记录（日期、用户、描述、卡点）</td></tr>
+  </table>
+
+  <h3>4.4 状态流转图</h3>
+  <div class="diagram">                    ┌─────────────┐
+    需求提交 ────────►│  执行中      │◄──── 二次分配（领导）
+                    │ in_progress  │
+                    └──────┬──────┘
+           上报卡点 │      │ 领导终止        │ 执行人完成
+                   ▼      ▼                 ▼
+            ┌──────────┐ ┌──────────┐  ┌──────────┐
+            │  阻塞    │ │ 已终止   │  │ 已归档   │
+            │ blocked  │ │terminated│  │   done   │
+            └──────────┘ └────┬─────┘  └────┬─────┘
+                              │  领导退回    │
+                              └──────┬───────┘
+                                     ▼
+                              执行中 in_progress</div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="kanban">
+  <h2>五、流动看板（双视图）</h2>
+  <p>流动看板为独立页面，与管理看板分离。顶部提供<strong>视图切换</strong>，两种视图共用筛选条件。</p>
+
+  <h3>5.1 视图切换</h3>
+  <table>
+    <tr><th>视图</th><th>适用场景</th><th>功能</th></tr>
+    <tr><td>📋 <strong>列表视图</strong></td><td>按人/状态批量查看、行内快捷操作</td><td>表格展示 8 列信息 + 可执行操作列</td></tr>
+    <tr><td>📊 <strong>四列看板</strong></td><td>直观感受流动、拖拽调整</td><td>执行中/阻塞/已归档/已终止四列 Kanban 卡片</td></tr>
+  </table>
+
+  <h3>5.2 筛选栏（两视图共用）</h3>
+  <ul>
+    <li><strong>状态按钮</strong>：全部 · 执行中 · 阻塞 · 已归档 · 已终止（带数量角标）</li>
+    <li><strong>审核人员</strong>下拉：领导可见，按 reviewer 过滤</li>
+    <li><strong>执行人员</strong>下拉：按主执行人或协助人过滤</li>
+  </ul>
+
+  <h3>5.3 列表视图字段</h3>
+  <table>
+    <tr><th>列名</th><th>数据字段</th></tr>
+    <tr><td>任务编号</td><td>req_no</td></tr>
+    <tr><td>任务名称</td><td>title</td></tr>
+    <tr><td>状态</td><td>flowCategory → 执行中/阻塞/已归档/已终止</td></tr>
+    <tr><td>需求提出人</td><td>created_by</td></tr>
+    <tr><td>审核人</td><td>reviewer</td></tr>
+    <tr><td>主执行人</td><td>assignee</td></tr>
+    <tr><td>其他执行人</td><td>assistants（顿号分隔）</td></tr>
+    <tr><td>可执行操作</td><td>按状态显示：终止执行 / 二次分配 / 退回执行中 / 任务完成</td></tr>
+  </table>
+  <p>点击列表行（非操作按钮区域）→ 弹出<strong>任务详情</strong>模态框，含完整描述、进展记录、验收标准及领导操作。</p>
+
+  <h3>5.4 四列看板</h3>
+  <ul>
+    <li>每列显示 WIP 计数与上限，超限显示 WIP 告警</li>
+    <li>领导可<strong>拖拽</strong>卡片在列间移动（映射四态 status）</li>
+    <li>卡片含类型标签、状态药丸、人员信息、进展摘要、领导操作按钮</li>
+    <li>执行人员：仅看自己相关任务，卡片只读不可拖拽</li>
+  </ul>
+
+  <h3>5.5 数据范围</h3>
+  <table>
+    <tr><th>角色</th><th>可见任务</th></tr>
+    <tr><td>领导 / 超管</td><td>全部有 req_no / reviewer / assignee 的任务</td></tr>
+    <tr><td>执行人员</td><td>assignee 或 assistants 包含自己的任务</td></tr>
+  </table>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="pages">
+  <h2>六、页面与导航结构</h2>
+
+  <h3>6.1 领导 / 超管侧栏顺序</h3>
+  <table>
+    <tr><th>#</th><th>页面</th><th>说明</th></tr>
+    <tr><td>1</td><td>📊 管理看板</td><td>指标仪表盘：流程条、四态指标卡、KPI、动态时间线、AI 洞察（<strong>不含</strong> Kanban）</td></tr>
+    <tr><td>2</td><td>📋 流动看板</td><td>列表视图 ↔ 四列看板切换；筛选 + 操作</td></tr>
+    <tr><td>3</td><td>🔍 审核备案</td><td>按四态分类的备案列表与快捷操作</td></tr>
+    <tr><td>4</td><td>📦 归档查看</td><td>已归档（done）任务，支持退回执行中</td></tr>
+    <tr><td>5</td><td>📤 需求提交</td><td>会议/语音/文档 → AI 拆解 → 人员选择</td></tr>
+    <tr><td>6</td><td>🤖 AI 助手</td><td>拆分、Copilot、站会、风险、回顾（超管为 AI 指挥中心）</td></tr>
+    <tr><td>7</td><td>👥 团队管理</td><td>仅 admin</td></tr>
+    <tr><td>8</td><td>💼 我的工作台</td><td>个人任务（置后）</td></tr>
+    <tr><td>9</td><td>👤 个人主页</td><td>参与任务同步列表（置后）</td></tr>
+  </table>
+
+  <h3>6.2 执行人员侧栏顺序</h3>
+  <table>
+    <tr><th>#</th><th>页面</th><th>说明</th></tr>
+    <tr><td>1</td><td>💼 我的工作台</td><td>主执行/协助分区、进展上报、标记完成</td></tr>
+    <tr><td>2</td><td>👤 个人主页</td><td>参与任务表</td></tr>
+    <tr><td>3</td><td>📤 需求提交</td><td>提交新需求</td></tr>
+    <tr><td>4</td><td>📋 流动看板</td><td>相关任务列表/看板，只读不可拖拽</td></tr>
+  </table>
+
+  <h3>6.3 管理看板布局</h3>
+  <ol>
+    <li>需求流转步骤条（含已终止分支）</li>
+    <li>四态指标卡（点击跳转四列看板视图）</li>
+    <li>KPI 条：近14天吞吐量、平均 Lead Time、WIP 使用率、待处理阻塞</li>
+    <li>快捷入口：四列看板 / 列表视图 / 审核备案 / 站会 / 风险</li>
+    <li>双栏：最近动态 + AI 洞察</li>
+  </ol>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="leader-actions">
+  <h2>七、领导专属操作</h2>
+  <p>可在流动看板（列表行内/卡片）、审核备案、归档查看、任务详情弹窗中执行：</p>
+  <table>
+    <tr><th>操作</th><th>适用状态</th><th>API</th><th>效果</th></tr>
+    <tr><td>⏹ 终止执行</td><td>执行中</td><td><code class="code">POST /api/items/:id/reviewer-terminate</code></td><td>→ terminated，归入已终止</td></tr>
+    <tr><td>🔄 二次分配</td><td>阻塞</td><td><code class="code">POST /api/items/:id/reviewer-reassign</code></td><td>→ in_progress，更新人员，清除阻塞</td></tr>
+    <tr><td>↩ 退回执行中</td><td>已归档 / 已终止</td><td><code class="code">POST /api/items/:id/reviewer-revoke</code></td><td>→ in_progress，清除完成时间</td></tr>
+    <tr><td>拖拽 / PATCH</td><td>任意四态</td><td><code class="code">PATCH /api/items/:id</code></td><td>直接调整状态，同步 acceptance_status</td></tr>
+  </table>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="executor">
+  <h2>八、执行人员功能</h2>
+  <h3>8.1 我的工作台</h3>
+  <ul>
+    <li>分区：<strong>主执行任务</strong> / <strong>协助任务</strong></li>
+    <li>进展上报：描述 + 卡点类型（资源/时间/技术/其他）+ 说明</li>
+    <li>含卡点 → 自动进入阻塞，等待领导二次分配</li>
+    <li>「任务完成」→ 自动归档（done + accepted）</li>
+  </ul>
+  <h3>8.2 流动看板（执行视图）</h3>
+  <ul>
+    <li>列表/看板均仅显示与自己相关的任务</li>
+    <li>列表行内可「任务完成」；不可终止/二次分配/拖拽</li>
+    <li>点击行查看详情，在工作台提交进展</li>
+  </ul>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="submit">
+  <h2>九、需求提交流程</h2>
+  <div class="card">
+    <h4>输入来源</h4>
+    <ul>
+      <li><strong>手动填写</strong>：标题、描述、验收标准、审核人、主执行人、协助人</li>
+      <li><strong>会议记录</strong>：文本/录音/文档上传 → AI 解析拆解</li>
+      <li><strong>语音上传</strong>：DashScope ASR 转写 → 自动创建任务</li>
+      <li><strong>文档上传</strong>：PDF/Word → 文本提取 → AI 拆解</li>
+    </ul>
+  </div>
+  <p>提交时若已指定审核人 + 主执行人，任务<strong>直接进入执行中</strong>（跳过 submitted 滞留），并自动生成 REQ 编号。页面内置 AI Copilot 辅助完善需求描述与验收标准。</p>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="ai">
+  <h2>十、AI 智能能力</h2>
+  <div class="grid-2">
+    <div class="card">
+      <h4>🧠 大模型 LLM</h4>
+      <p>默认 <strong>DeepSeek</strong>（<code class="code">deepseek-chat</code>），可选 <code class="code">deepseek-reasoner</code> 深度推理。</p>
+      <p>用途：需求拆分、Copilot 对话、站会/风险/回顾增强、会议拆解、文档分析、智能分配推荐。</p>
+    </div>
+    <div class="card">
+      <h4>🎙️ 语音 ASR</h4>
+      <p><strong>阿里云 DashScope</strong>（<code class="code">paraformer-v2</code> 等），含敏捷热词校正。</p>
+      <p>用途：会议录音转写、语音需求、长音频异步转写（需 ASR_PUBLIC_BASE_URL）。</p>
+    </div>
+  </div>
+
+  <h3>10.1 AI 功能清单</h3>
+  <table>
+    <tr><th>功能</th><th>入口</th><th>API</th></tr>
+    <tr><td>需求智能拆分</td><td>需求提交 / AI 助手</td><td><code class="code">POST /api/ai/split-requirement</code></td></tr>
+    <tr><td>智能人员分配</td><td>审核分配</td><td><code class="code">POST /api/items/:id/smart-assign</code></td></tr>
+    <tr><td>站会摘要</td><td>管理看板 / 顶栏</td><td><code class="code">POST /api/ai/standup</code></td></tr>
+    <tr><td>风险扫描</td><td>管理看板 / 顶栏</td><td><code class="code">POST /api/ai/risks</code></td></tr>
+    <tr><td>项目回顾</td><td>AI 助手</td><td><code class="code">POST /api/ai/review-report</code></td></tr>
+    <tr><td>Copilot 对话</td><td>AI 助手 / 需求提交</td><td><code class="code">POST /api/ai/copilot</code></td></tr>
+    <tr><td>会议解析</td><td>需求提交</td><td><code class="code">POST /api/ai/meeting/*</code></td></tr>
+    <tr><td>语音处理</td><td>需求提交</td><td><code class="code">POST /api/ai/voice/process</code></td></tr>
+    <tr><td>文档处理</td><td>需求提交</td><td><code class="code">POST /api/ai/document/process</code></td></tr>
+  </table>
+  <p>未配置 API Key 时，平台自动降级为<strong>本地规则引擎</strong>，核心流程不受影响。</p>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="architecture">
+  <h2>十一、技术架构</h2>
+
+  <h3>11.1 技术栈</h3>
+  <table>
+    <tr><th>层级</th><th>技术</th></tr>
+    <tr><td>前端</td><td>原生 HTML + CSS + JavaScript（无框架），单页应用式导航</td></tr>
+    <tr><td>后端</td><td>Node.js + Express 4.x</td></tr>
+    <tr><td>存储</td><td>JSON 文件（<code class="code">data/platform.json</code>），启动时自动迁移/修复</td></tr>
+    <tr><td>认证</td><td>Bearer Token 内存 Session（24h TTL）</td></tr>
+    <tr><td>文件上传</td><td>multer（音频/文档）</td></tr>
+    <tr><td>文档解析</td><td>pdf-parse、mammoth（Word）</td></tr>
+  </table>
+
+  <h3>11.2 目录结构</h3>
+  <div class="arch">敏捷管理平台/
+├── public/                    # 静态前端
+│   ├── index.html             # 主应用入口
+│   ├── login.html             # 登录页
+│   ├── css/style.css          # 全局样式
+│   ├── js/app.js              # 前端核心逻辑
+│   └── FDE管理平台开发方案.html  # 本文档
+├── server/
+│   ├── index.js               # Express 路由入口
+│   ├── auth.js                # 认证、权限、导航、种子用户
+│   ├── db.js                  # JSON 存储、CRUD、指标
+│   ├── env.js                 # 环境变量加载
+│   └── ai/
+│       ├── agent.js             # AI 教练 Agent
+│       ├── engine.js            # 站会/风险/回顾
+│       ├── llm.js               # DeepSeek / Qwen 调用
+│       ├── asr.js               # 语音转写
+│       ├── assign.js            # 智能分配
+│       ├── meeting.js           # 会议解析
+│       ├── voice.js             # 语音需求
+│       └── docparse.js          # 文档解析
+├── data/platform.json         # 运行时数据（自动生成）
+├── .env.example               # 环境变量模板
+└── package.json</div>
+
+  <h3>11.3 前端核心模块（app.js）</h3>
+  <table>
+    <tr><th>模块</th><th>职责</th></tr>
+    <tr><td>FLOW_COLS / flowCategory</td><td>四态分类映射</td></tr>
+    <tr><td>renderKanban / renderKanbanBoard</td><td>列表视图 + 四列看板双视图</td></tr>
+    <tr><td>renderLeaderDashboard</td><td>管理看板（指标，不含 Kanban）</td></tr>
+    <tr><td>leaderAction / flowListActionsHtml</td><td>终止、二次分配、退回、完成</td></tr>
+    <tr><td>initDragDrop / moveItem</td><td>四列看板拖拽（仅领导）</td></tr>
+    <tr><td>renderSubmit / renderMyWork</td><td>需求提交、工作台</td></tr>
+  </table>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="api">
+  <h2>十二、API 接口参考</h2>
+
+  <h3>12.1 认证</h3>
+  <table>
+    <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+    <tr><td>POST</td><td>/api/auth/login</td><td>登录，返回 token + user + nav</td></tr>
+    <tr><td>POST</td><td>/api/auth/logout</td><td>登出</td></tr>
+    <tr><td>GET</td><td>/api/auth/me</td><td>当前用户、LLM/AI 状态</td></tr>
+  </table>
+
+  <h3>12.2 任务</h3>
+  <table>
+    <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+    <tr><td>GET</td><td>/api/items</td><td>全部任务</td></tr>
+    <tr><td>GET</td><td>/api/items/my-work</td><td>当前用户进行中任务</td></tr>
+    <tr><td>GET</td><td>/api/items/:id</td><td>单条任务</td></tr>
+    <tr><td>POST</td><td>/api/items</td><td>新建任务</td></tr>
+    <tr><td>PATCH</td><td>/api/items/:id</td><td>更新（仅领导可改状态）</td></tr>
+    <tr><td>DELETE</td><td>/api/items/:id</td><td>删除（仅超管）</td></tr>
+    <tr><td>POST</td><td>/api/items/:id/progress</td><td>提交进展</td></tr>
+    <tr><td>POST</td><td>/api/items/:id/complete</td><td>执行人标记完成</td></tr>
+    <tr><td>POST</td><td>/api/items/:id/reviewer-terminate</td><td>领导终止 → 已终止</td></tr>
+    <tr><td>POST</td><td>/api/items/:id/reviewer-reassign</td><td>领导二次分配</td></tr>
+    <tr><td>POST</td><td>/api/items/:id/reviewer-revoke</td><td>领导退回执行中</td></tr>
+    <tr><td>POST</td><td>/api/items/:id/reviewer-reject</td><td>领导驳回</td></tr>
+    <tr><td>POST</td><td>/api/items/:id/smart-assign</td><td>AI 智能分配</td></tr>
+    <tr><td>POST</td><td>/api/items/:id/review</td><td>审核通过/驳回</td></tr>
+    <tr><td>POST</td><td>/api/items/:id/accept</td><td>验收</td></tr>
+  </table>
+
+  <h3>12.3 用户与度量</h3>
+  <table>
+    <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+    <tr><td>GET</td><td>/api/users</td><td>用户列表</td></tr>
+    <tr><td>GET</td><td>/api/users/:id/projects</td><td>用户参与任务</td></tr>
+    <tr><td>GET</td><td>/api/metrics</td><td>吞吐量、Lead Time、WIP 等</td></tr>
+    <tr><td>GET</td><td>/api/activity</td><td>活动日志</td></tr>
+    <tr><td>GET</td><td>/api/ai/insights</td><td>AI 洞察列表</td></tr>
+    <tr><td>GET</td><td>/api/ai/status</td><td>LLM/ASR 配置状态</td></tr>
+  </table>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="data">
+  <h2>十三、数据模型</h2>
+
+  <h3>13.1 Item（任务）</h3>
+  <table>
+    <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+    <tr><td>id</td><td>uuid</td><td>主键</td></tr>
+    <tr><td>type</td><td>enum</td><td>epic / story / task / bug</td></tr>
+    <tr><td>title, description</td><td>string</td><td>标题、描述</td></tr>
+    <tr><td>req_no</td><td>string</td><td>REQ-YYYY-NNNN</td></tr>
+    <tr><td>status</td><td>enum</td><td>submitted, todo, in_progress, review, blocked, done, <strong>terminated</strong></td></tr>
+    <tr><td>acceptance_status</td><td>enum</td><td>pending / accepted / rejected / terminated</td></tr>
+    <tr><td>assignee, reviewer, created_by</td><td>string</td><td>人员</td></tr>
+    <tr><td>assistants</td><td>string[]</td><td>协助执行人</td></tr>
+    <tr><td>blocker_type, blocked_reason</td><td>string</td><td>卡点类型与原因</td></tr>
+    <tr><td>progress_updates</td><td>array</td><td>进展记录</td></tr>
+    <tr><td>story_points, priority</td><td>number</td><td>估算与优先级</td></tr>
+    <tr><td>completed_at</td><td>ISO datetime</td><td>完成/终止时间</td></tr>
+  </table>
+
+  <h3>13.2 User（用户）</h3>
+  <table>
+    <tr><th>字段</th><th>说明</th></tr>
+    <tr><td>emp_id, name, password(hash)</td><td>工号、姓名、密码</td></tr>
+    <tr><td>role</td><td>admin / manager / member</td></tr>
+    <tr><td>capabilities</td><td>reviewer, proposer, executor</td></tr>
+    <tr><td>profile</td><td>技能、可用性、项目历史</td></tr>
+  </table>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="deploy">
+  <h2>十四、部署与配置</h2>
+
+  <h3>14.1 快速启动</h3>
+  <div class="arch">cd 敏捷管理平台
+npm install
+cp .env.example .env    # 填入 API Key（可选）
+npm start               # 默认 http://localhost:3456</div>
+
+  <h3>14.2 环境变量</h3>
+  <table>
+    <tr><th>变量</th><th>说明</th></tr>
+    <tr><td>PORT</td><td>服务端口，默认 3456</td></tr>
+    <tr><td>DEEPSEEK_API_KEY</td><td>DeepSeek 大模型 Key</td></tr>
+    <tr><td>DEEPSEEK_MODEL</td><td>默认 deepseek-chat</td></tr>
+    <tr><td>DASHSCOPE_API_KEY</td><td>阿里云语音转写 Key</td></tr>
+    <tr><td>ASR_MODEL</td><td>默认 paraformer-v2</td></tr>
+    <tr><td>ASR_PUBLIC_BASE_URL</td><td>长音频异步转写公网地址（可选）</td></tr>
+  </table>
+
+  <h3>14.3 测试账号</h3>
+  <table>
+    <tr><th>角色</th><th>工号</th><th>密码</th></tr>
+    <tr><td>超级管理员</td><td>666666</td><td>aiic@2026</td></tr>
+    <tr><td>领导（曾锐）</td><td>600412</td><td>600412</td></tr>
+    <tr><td>执行（赵立泽）</td><td>600785</td><td>600785</td></tr>
+  </table>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section id="changelog">
+  <h2>十五、版本变更记录</h2>
+  <table>
+    <tr><th>版本</th><th>变更</th></tr>
+    <tr><td>v1.0 基线</td><td>六列 Kanban + Sprint/Backlog 迭代模式</td></tr>
+    <tr><td>v1.0 流动改造</td><td>移除 Sprint/Backlog；三态 → <strong>四态</strong>（新增已终止）；领导终止归入 terminated 而非 done</td></tr>
+    <tr><td>v1.0 页面拆分</td><td>管理看板与流动看板<strong>独立分页</strong>；修复领导权限 requirePermission 逻辑</td></tr>
+    <tr><td>v1.0 列表看板</td><td>流动看板新增<strong>列表视图</strong>：状态按钮 + 审核/执行人筛选 + 8 列表格 + 行内操作</td></tr>
+    <tr><td>v1.0 双视图</td><td>保留<strong>四列看板</strong>与列表视图可切换；筛选条件共用</td></tr>
+    <tr><td>v1.0 品牌</td><td>平台更名为 <strong>FDE管理平台</strong></td></tr>
+  </table>
+</section>
+
+</main>
+</div>
+
+<footer class="footer">
+  FDE管理平台 完整开发方案 · 基于当前代码库自动生成 · 2026-07-12<br>
+  访问地址：<a href="http://localhost:3456">http://localhost:3456</a> · 文档路径：<a href="/FDE管理平台开发方案.html">/FDE管理平台开发方案.html</a>
+</footer>
+
+</body>
+</html>

@@ -59,9 +59,12 @@ function isConfigured() { return Boolean(getConfig()); }
 function getProviderInfo() {
   const cfg = getConfig();
   const asrKey = process.env.DASHSCOPE_API_KEY;
+  const asr = require('./asr');
   return {
-    llm: cfg ? { provider: cfg.provider, model: cfg.model } : null,
-    asr: asrKey ? { provider: '阿里云 Paraformer', model: 'paraformer-v2' } : null,
+    llm: cfg ? { provider: cfg.provider, model: cfg.model, reasoner: process.env.DEEPSEEK_REASONER_MODEL || 'deepseek-reasoner' } : null,
+    asr: asrKey ? { provider: '阿里云 DashScope 多引擎', model: asr.MODELS?.primary || 'paraformer-v2', ...asr.getAsrInfo() } : null,
+    docparse: { formats: require('./docparse').getSupportedFormats(), mode: 'multi-pass' },
+    agent: { mode: 'RAG + 多轮对话', intents: ['split', 'assign', 'risk', 'standup', 'mywork', 'team'] },
     ready: Boolean(cfg && asrKey),
   };
 }
@@ -100,6 +103,7 @@ async function chat(messages, opts = {}) {
     model: opts.model || cfg.model,
     messages,
     temperature: opts.temperature ?? 0.7,
+    max_tokens: opts.max_tokens || 8192,
     ...(opts.json ? { response_format: { type: 'json_object' } } : {}),
   };
 
@@ -118,6 +122,161 @@ async function chat(messages, opts = {}) {
     console.error(`[LLM ${cfg.provider}]`, err.message);
     return null;
   }
+}
+
+function parseJsonSafe(raw) {
+  if (!raw) return null;
+  try {
+    const clean = raw.replace(/```json\n?|\n?```/g, '').trim();
+    return JSON.parse(clean);
+  } catch (e) {
+    console.error('JSON parse error:', e.message);
+    return null;
+  }
+}
+
+async function analyzeChunk(chunk, userName, chunkIndex, totalChunks) {
+  const prompt = `你是资深需求分析师。分析文档片段 (${chunkIndex + 1}/${totalChunks})，提取结构化信息。
+
+提交人：${userName}
+文档片段标题：${chunk.title}
+
+返回 JSON：
+{
+  "section_summary": "本段摘要",
+  "requirements": ["功能需求1", "功能需求2"],
+  "constraints": ["约束1"],
+  "acceptance_hints": ["验收要点1"],
+  "keywords": ["关键词"],
+  "open_questions": ["待确认问题"]
+}
+
+文档内容：
+${chunk.content.slice(0, 8000)}`;
+
+  const result = await chat([
+    { role: 'system', content: '你是专业需求分析师，只返回合法 JSON。' },
+    { role: 'user', content: prompt },
+  ], { json: true, temperature: 0.2 });
+  return parseJsonSafe(result) || { section_summary: chunk.content.slice(0, 200), requirements: [], keywords: [] };
+}
+
+async function synthesizeDocumentAnalysis(chunkResults, meta, userName) {
+  const merged = {
+    sections: chunkResults.map(c => c.section_summary).filter(Boolean),
+    requirements: chunkResults.flatMap(c => c.requirements || []),
+    constraints: chunkResults.flatMap(c => c.constraints || []),
+    acceptance_hints: chunkResults.flatMap(c => c.acceptance_hints || []),
+    keywords: [...new Set(chunkResults.flatMap(c => c.keywords || []))],
+    open_questions: chunkResults.flatMap(c => c.open_questions || []),
+  };
+
+  const prompt = `你是 AI 赋能敏捷项目管理首席专家。基于多段文档分析结果，完成：
+
+1. 输出完整 Markdown 需求规格书（背景/目标/功能清单/非功能需求/验收标准/里程碑）
+2. 拆分为 Epic → Story → Task（INVEST 原则，斐波那契 SP）
+3. 标注优先级、风险、待确认事项
+
+文档元信息：${JSON.stringify(meta)}
+提交人：${userName}
+
+分析汇总：
+${JSON.stringify(merged, null, 0)}
+
+返回严格 JSON：
+{
+  "document": "完整 Markdown 需求规格书",
+  "epic": { "title": "...", "description": "..." },
+  "stories": [{ "title": "...", "description": "...", "story_points": 3, "acceptance_criteria": "Given...When...Then...", "priority": 1, "tasks": ["任务1","任务2"] }],
+  "summary": "200字摘要",
+  "keywords": ["关键词"],
+  "priority": "high|medium|low",
+  "risks": ["风险1"],
+  "action_items": ["行动项1"],
+  "confidence": 0.85
+}`;
+
+  const result = await chat([
+    { role: 'system', content: '你是敏捷需求工程专家。深度分析文档，输出高质量需求规格和任务拆分。只返回合法 JSON。' },
+    { role: 'user', content: prompt },
+  ], { json: true, temperature: 0.25, max_tokens: 12000 });
+
+  const parsed = parseJsonSafe(result);
+  if (!parsed) return null;
+  return normalizeAnalysis(parsed);
+}
+
+function normalizeAnalysis(parsed) {
+  parsed.stories = (parsed.stories || []).map(s => ({
+    type: 'story', ai_generated: true, story_points: s.story_points || 3,
+    priority: s.priority || 2, ...s,
+  }));
+  parsed.tasks = parsed.stories.flatMap(s => (s.tasks || []).map(t => ({
+    type: 'task', title: t, parent_title: s.title,
+  })));
+  parsed.epic = {
+    type: 'epic', ai_generated: true,
+    title: parsed.epic?.title || '文档需求',
+    description: parsed.epic?.description || parsed.summary || '',
+    story_points: parsed.stories.reduce((a, s) => a + (s.story_points || 0), 0),
+  };
+  return parsed;
+}
+
+async function analyzeDocument(parsed, userName) {
+  const { chunks, meta, text } = parsed;
+  const cfg = getConfig();
+  if (!cfg) return null;
+
+  const chunkResults = [];
+  for (let i = 0; i < chunks.length; i++) {
+    chunkResults.push(await analyzeChunk(chunks[i], userName, i, chunks.length));
+  }
+
+  let analysis = await synthesizeDocumentAnalysis(chunkResults, meta, userName);
+
+  if (!analysis && text.length < 12000) {
+    analysis = await analyzeVoiceTranscript(text, userName);
+  }
+
+  if (analysis) {
+    analysis.meta = meta;
+    analysis.analysis_mode = chunks.length > 1 ? 'multi-pass' : 'single-pass';
+    analysis.chunk_count = chunks.length;
+  }
+  return analysis;
+}
+
+async function parseMeetingToRequirement(content, userName) {
+  const prompt = `你是敏捷需求分析专家。根据以下会议记录/语音转写/文档内容，提取并结构化需求信息，用于填写需求提交表单。
+
+提交人：${userName}
+
+返回严格 JSON（不要 markdown 代码块）：
+{
+  "title": "需求标题（简洁，≤50字）",
+  "scene": "应用场景与业务目标（详细描述背景、用户、痛点）",
+  "acceptance": "验收目标与验收标准（Given-When-Then 或条目列表）",
+  "deadline": "期望完成时间（YYYY-MM-DD 格式，无法推断则留空字符串）",
+  "summary": "100字以内需求摘要",
+  "priority": "high|medium|low",
+  "keywords": ["关键词1", "关键词2"]
+}
+
+会议记录内容：
+${content.slice(0, 12000)}`;
+
+  const result = await chat([
+    { role: 'system', content: '你擅长从会议讨论中提取可执行的需求信息。只返回合法 JSON。' },
+    { role: 'user', content: prompt },
+  ], { json: true, temperature: 0.2 });
+
+  const parsed = parseJsonSafe(result);
+  if (parsed?.title) {
+    parsed.engine = 'llm';
+    return parsed;
+  }
+  return null;
 }
 
 async function smartSplitRequirement(text) {
@@ -194,17 +353,9 @@ ${transcript}`;
 
   if (!result) return null;
   try {
-    const clean = result.replace(/```json\n?|\n?```/g, '').trim();
-    const parsed = JSON.parse(clean);
-    parsed.stories = (parsed.stories || []).map(s => ({
-      type: 'story', ai_generated: true, story_points: s.story_points || 3,
-      priority: s.priority || 2, ...s,
-    }));
-    parsed.tasks = parsed.stories.flatMap(s => (s.tasks || []).map(t => ({
-      type: 'task', title: t, parent_title: s.title,
-    })));
-    parsed.epic = { type: 'epic', ai_generated: true, title: parsed.epic?.title || '语音需求', description: parsed.epic?.description || transcript.slice(0, 200), story_points: parsed.stories.reduce((a, s) => a + (s.story_points || 0), 0) };
-    return parsed;
+    const parsed = parseJsonSafe(result);
+    if (!parsed) return null;
+    return normalizeAnalysis(parsed);
   } catch (e) { console.error('Voice analysis parse error:', e.message); }
   return null;
 }
@@ -213,9 +364,9 @@ async function smartAnalyze(context, task) {
   const prompts = {
     standup: `根据以下项目数据生成今日站会摘要（Markdown，中文）：\n${context}`,
     risks: `分析以下项目风险（Markdown，中文）：\n${context}`,
-    retro: `根据 Sprint 数据生成回顾报告（Markdown，中文）：\n${context}`,
-    copilot: `你是 AgileAI 智能协作者（国产大模型驱动）。基于上下文回答，Markdown 格式。\n\n上下文：\n${context}\n\n问题：${task}`,
-    assign: `推荐最佳执行人。返回 JSON: {"assignee":"姓名","reason":"原因"}\n\n${context}`,
+    retro: `根据项目流动数据生成回顾报告（Markdown，中文）：\n${context}`,
+    copilot: `你是 FDE管理平台 智能协作者（国产大模型驱动）。基于上下文回答，Markdown 格式。\n\n上下文：\n${context}\n\n问题：${task}`,
+    assign: `根据任务需求和成员项目背景、技能、工作负载，推荐主执行人和1-3名协助执行人。返回 JSON: {"assignee":"主执行人","assistants":["协助人1","协助人2"],"reason":"理由"}\n\n${context}`,
   };
   return chat([
     { role: 'system', content: '你是 AI 赋能敏捷项目管理专家，回答简洁专业。' },
@@ -223,4 +374,4 @@ async function smartAnalyze(context, task) {
   ], { temperature: task === 'assign' ? 0.3 : 0.6, json: task === 'assign' });
 }
 
-module.exports = { isConfigured, getConfig, getProviderInfo, chat, smartSplitRequirement, smartAnalyze, analyzeVoiceTranscript };
+module.exports = { isConfigured, getConfig, getProviderInfo, chat, smartSplitRequirement, smartAnalyze, analyzeVoiceTranscript, analyzeDocument, parseMeetingToRequirement, parseJsonSafe, normalizeAnalysis };

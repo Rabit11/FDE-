@@ -2,8 +2,8 @@ const { execSync, spawnSync } = require('child_process');
 const https = require('https');
 const path = require('path');
 
-const REPO = 'ai-agile-platform';
-const DESC = 'AI-powered agile project management platform - Sprint/Kanban/AI Assistant';
+const REPO = 'FDE-';
+const DESC = 'FDE管理平台 - 流动看板 / AI 协作者 / 四态任务流转';
 
 function getCredential() {
   const r = spawnSync('git', ['credential', 'fill'], {

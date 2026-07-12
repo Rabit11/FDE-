@@ -1,64 +1,38 @@
 const crypto = require('crypto');
 
-const ROLES = {
-  admin: {
-    label: '超级管理员',
-    badge: 'admin',
-    nav: [
-      { id: 'dashboard', label: '📊 全局仪表盘' },
-      { id: 'voice', label: '🎙️ 语音需求' },
-      { id: 'kanban', label: '📋 流动看板' },
-      { id: 'backlog', label: '📝 Backlog' },
-      { id: 'sprint', label: '🏃 Sprint' },
-      { id: 'review', label: '🔍 审核分配' },
-      { id: 'acceptance', label: '✅ 验收中心' },
-      { id: 'ai', label: '🤖 AI 指挥中心' },
-      { id: 'team', label: '👥 团队管理' },
-    ],
-    permissions: ['all'],
-  },
-  manager: {
-    label: '管理员',
-    badge: 'manager',
-    nav: [
-      { id: 'dashboard', label: '📊 管理仪表盘' },
-      { id: 'voice', label: '🎙️ 语音需求' },
-      { id: 'kanban', label: '📋 团队看板' },
-      { id: 'backlog', label: '📝 Backlog' },
-      { id: 'sprint', label: '🏃 Sprint' },
-      { id: 'review', label: '🔍 审核分配' },
-      { id: 'acceptance', label: '✅ 验收中心' },
-      { id: 'ai', label: '🤖 AI 助手' },
-    ],
-    permissions: ['review', 'assign', 'sprint', 'acceptance', 'ai', 'metrics'],
-  },
-  executor: {
-    label: '执行人员',
-    badge: 'executor',
-    nav: [
-      { id: 'mywork', label: '💼 我的工作台' },
-      { id: 'voice', label: '🎙️ 语音提交' },
-      { id: 'kanban', label: '📋 任务看板' },
-      { id: 'submit', label: '📤 提交需求' },
-      { id: 'ai', label: '🤖 AI 协作者' },
-    ],
-    permissions: ['execute', 'submit', 'ai_copilot'],
-  },
+const CAPABILITIES = {
+  reviewer: { label: '审核人员', icon: '🔍' },
+  proposer: { label: '需求提出人员', icon: '📤' },
+  executor: { label: '执行人员', icon: '⚡' },
+};
+
+const LEADER_NAMES = ['曾锐', '林宇飞', '毛研勋', '张弛'];
+
+const NAV_ITEMS = {
+  dashboard: { id: 'dashboard', label: '📊 仪表盘', caps: ['reviewer'], roles: ['admin'] },
+  mywork: { id: 'mywork', label: '💼 我的工作台', caps: ['executor'], roles: [] },
+  profile: { id: 'profile', label: '👤 个人主页', caps: [], roles: [] },
+  kanban: { id: 'kanban', label: '📋 流动看板', caps: ['executor', 'reviewer'], roles: [] },
+  review: { id: 'review', label: '🔍 审核备案', caps: ['reviewer'], roles: ['admin', 'manager'] },
+  acceptance: { id: 'acceptance', label: '📦 归档查看', caps: ['reviewer'], roles: ['admin', 'manager'] },
+  submit: { id: 'submit', label: '📤 需求提交', caps: ['proposer'], roles: [] },
+  ai: { id: 'ai', label: '🤖 AI 助手', caps: ['reviewer'], roles: ['admin', 'manager'] },
+  team: { id: 'team', label: '👥 团队管理', caps: [], roles: ['admin'] },
 };
 
 const SEED_USERS = [
-  { emp_id: '666666', name: 'admin', password: 'aiic@2026', role: 'admin', dept: '系统管理' },
-  { emp_id: '600412', name: '曾锐', password: '600412', role: 'manager', dept: '管理部门' },
-  { emp_id: '600764', name: '张弛', password: '600764', role: 'manager', dept: '管理部门' },
-  { emp_id: '600471', name: '林宇飞', password: '600471', role: 'manager', dept: '管理部门' },
-  { emp_id: '600664', name: '毛研勋', password: '600664', role: 'manager', dept: '管理部门' },
-  { emp_id: '600785', name: '赵立泽', password: '600785', role: 'executor', dept: '执行团队' },
-  { emp_id: '600831', name: '王诗瑶', password: '600831', role: 'executor', dept: '执行团队' },
-  { emp_id: '600838', name: '万贤书', password: '600838', role: 'executor', dept: '执行团队' },
-  { emp_id: '600932', name: '刘紫薇', password: '600932', role: 'executor', dept: '执行团队' },
-  { emp_id: '601247', name: '王紫薇', password: '601247', role: 'executor', dept: '执行团队' },
-  { emp_id: '601308', name: '杨会冉', password: '601308', role: 'executor', dept: '执行团队' },
-  { emp_id: '609107', name: '杨子豪', password: '609107', role: 'executor', dept: '执行团队' },
+  { emp_id: '666666', name: 'admin', password: 'aiic@2026', role: 'admin', dept: '系统管理', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: true },
+  { emp_id: '600412', name: '曾锐', password: '600412', role: 'manager', dept: '管理部门', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600764', name: '张弛', password: '600764', role: 'manager', dept: '管理部门', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600471', name: '林宇飞', password: '600471', role: 'manager', dept: '管理部门', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600664', name: '毛研勋', password: '600664', role: 'manager', dept: '管理部门', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600785', name: '赵立泽', password: '600785', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600831', name: '王诗瑶', password: '600831', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600838', name: '万贤书', password: '600838', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600932', name: '刘紫薇', password: '600932', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '601247', name: '王紫薇', password: '601247', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '601308', name: '杨会冉', password: '601308', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '609107', name: '杨子豪', password: '609107', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
 ];
 
 const sessions = new Map();
@@ -72,9 +46,67 @@ function createToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function getNavForUser(user) {
+  const caps = user.capabilities || [];
+  const seen = new Set();
+  const nav = [];
+
+  Object.values(NAV_ITEMS).forEach(item => {
+    if (item.id === 'ai' && caps.includes('proposer')) return;
+    const allowed = item.roles.includes(user.role) ||
+      item.caps.some(c => caps.includes(c)) ||
+      (item.id === 'profile') ||
+      (item.id === 'kanban' && caps.length > 0);
+    if (allowed && !seen.has(item.id)) {
+      seen.add(item.id);
+      if (item.id === 'dashboard' && !caps.includes('reviewer') && user.role !== 'admin') return;
+      if (item.id === 'dashboard' && user.role === 'admin') nav.push({ ...item, label: '📊 全局管理看板' });
+      else if (item.id === 'dashboard' && caps.includes('reviewer')) nav.push({ ...item, label: '📊 管理看板' });
+      else if (item.id === 'dashboard') nav.push({ ...item, label: '📊 仪表盘' });
+      else if (item.id === 'ai' && user.role === 'admin') nav.push({ ...item, label: '🤖 AI 指挥中心' });
+      else nav.push(item);
+    }
+  });
+
+  if (!caps.includes('reviewer') && caps.includes('executor')) {
+    return nav.sort((a, b) => {
+      const order = ['mywork', 'profile', 'submit', 'kanban'];
+      return order.indexOf(a.id) - order.indexOf(b.id);
+    });
+  }
+  if (caps.includes('reviewer') || user.role === 'admin') {
+    const order = ['dashboard', 'kanban', 'review', 'acceptance', 'submit', 'ai', 'team', 'mywork', 'profile'];
+    return nav.sort((a, b) => {
+      const ai = order.indexOf(a.id);
+      const bi = order.indexOf(b.id);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+  }
+  return nav;
+}
+
+function getRoleLabel(user) {
+  if (user.role === 'admin') return '超级管理员';
+  if (LEADER_NAMES.includes(user.name) || (user.role === 'manager' && (user.capabilities || []).includes('reviewer'))) {
+    return '领导';
+  }
+  const caps = (user.capabilities || []).map(c => CAPABILITIES[c]?.label).filter(Boolean);
+  return caps.join(' · ') || '成员';
+}
+
+function isLeader(user) {
+  if (!user) return false;
+  return user.role === 'admin' || (user.capabilities || []).includes('reviewer');
+}
+
 function sanitizeUser(user) {
   const { password, ...safe } = user;
-  return { ...safe, roleLabel: ROLES[user.role]?.label || user.role };
+  return {
+    ...safe,
+    roleLabel: getRoleLabel(user),
+    nav: getNavForUser(user),
+    capabilityLabels: (user.capabilities || []).map(c => CAPABILITIES[c]?.label || c),
+  };
 }
 
 function login(empId, password, users) {
@@ -82,31 +114,29 @@ function login(empId, password, users) {
   if (!user || user.password !== hashPassword(password)) return null;
   const token = createToken();
   sessions.set(token, { userId: user.id, createdAt: Date.now() });
-  return { token, user: sanitizeUser(user) };
+  const safe = sanitizeUser(user);
+  return { token, user: safe, roleConfig: { label: safe.roleLabel, nav: safe.nav, capabilities: user.capabilities } };
 }
 
-function logout(token) {
-  sessions.delete(token);
-}
+function logout(token) { sessions.delete(token); }
 
 function getSessionUser(token, users) {
   if (!token) return null;
   const session = sessions.get(token);
   if (!session) return null;
-  if (Date.now() - session.createdAt > SESSION_TTL) {
-    sessions.delete(token);
-    return null;
-  }
+  if (Date.now() - session.createdAt > SESSION_TTL) { sessions.delete(token); return null; }
   const user = users.find(u => u.id === session.userId);
   return user ? sanitizeUser(user) : null;
 }
 
 function hasPermission(user, permission) {
   if (!user) return false;
-  const role = ROLES[user.role];
-  if (!role) return false;
-  if (role.permissions.includes('all')) return true;
-  return role.permissions.includes(permission);
+  if (user.role === 'admin') return true;
+  const capMap = { review: 'reviewer', assign: 'reviewer', acceptance: 'reviewer', submit: 'proposer', execute: 'executor', ai: true, ai_copilot: true, metrics: 'reviewer', all: false };
+  if (permission === 'all') return user.role === 'admin';
+  const need = capMap[permission];
+  if (need === true) return true;
+  return (user.capabilities || []).includes(need);
 }
 
 function authMiddleware(getUsers) {
@@ -125,13 +155,15 @@ function authMiddleware(getUsers) {
 function requirePermission(...perms) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: '未登录' });
-    if (hasPermission(req.user, 'all')) return next();
-    if (perms.some(p => hasPermission(req.user, p))) return next();
+    if (req.user.role === 'admin') return next();
+    const effective = perms.filter(p => p !== 'all');
+    if (effective.length === 0) return res.status(403).json({ error: '权限不足' });
+    if (effective.some(p => hasPermission(req.user, p))) return next();
     return res.status(403).json({ error: '权限不足' });
   };
 }
 
 module.exports = {
-  ROLES, SEED_USERS, hashPassword, login, logout, getSessionUser,
-  hasPermission, authMiddleware, requirePermission, sanitizeUser,
+  CAPABILITIES, NAV_ITEMS, SEED_USERS, LEADER_NAMES, hashPassword, login, logout, getSessionUser,
+  hasPermission, authMiddleware, requirePermission, sanitizeUser, getNavForUser, getRoleLabel, isLeader,
 };
