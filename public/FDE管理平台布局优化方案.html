@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FDE管理平台 · 布局优化方案</title>
+<style>
+:root {
+  --bg: #f3f7fc; --surface: #fff; --surface2: #f8fbff;
+  --border: #d8e3f0; --text: #153e75; --muted: #5a7291;
+  --accent: #2563eb; --accent-light: #eaf2ff;
+  --success: #16a34a; --warning: #d97706; --danger: #dc2626; --purple: #7c3aed;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); line-height: 1.75; font-size: 15px; }
+.hero { background: linear-gradient(135deg, #0f766e, #0891b2 50%, #2563eb); padding: 2.5rem 2rem; color: #fff; }
+.hero h1 { font-size: 2rem; margin-bottom: 0.4rem; }
+.hero p { opacity: 0.95; }
+.hero .meta { opacity: 0.92; font-size: 0.88rem; margin-top: 0.75rem; }
+.hero .meta span { margin-right: 1.5rem; }
+.layout { display: flex; max-width: 1320px; margin: 0 auto; }
+nav.toc { width: 250px; flex-shrink: 0; padding: 1.5rem 1rem 2rem; position: sticky; top: 0; align-self: flex-start; max-height: 100vh; overflow-y: auto; background: var(--surface); border-right: 1px solid var(--border); }
+nav.toc a { display: block; padding: 0.35rem 0.6rem; font-size: 0.82rem; color: var(--muted); text-decoration: none; border-radius: 6px; }
+nav.toc a:hover { background: var(--accent-light); color: var(--accent); }
+nav.toc .toc-title { font-size: 0.72rem; font-weight: 700; color: var(--muted); margin: 1rem 0 0.35rem 0.6rem; }
+main { flex: 1; padding: 1.5rem 2rem 3rem; min-width: 0; }
+h2 { font-size: 1.35rem; margin: 2rem 0 0.85rem; padding-bottom: 0.45rem; border-bottom: 2px solid var(--border); color: #0f2e5b; }
+h2:first-child { margin-top: 0; }
+h3 { font-size: 1.05rem; margin: 1.1rem 0 0.6rem; color: var(--accent); }
+h4 { font-size: 0.92rem; margin: 0.85rem 0 0.4rem; color: #1e40af; }
+p, li { color: #334155; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.25rem; margin-bottom: 0.85rem; box-shadow: 0 2px 8px rgba(15,46,91,0.04); }
+.card--ok { border-left: 4px solid var(--success); }
+.card--warn { border-left: 4px solid var(--warning); }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.85rem; }
+@media (max-width: 960px) { .layout { flex-direction: column; } nav.toc { width: 100%; position: static; max-height: none; } .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+table { width: 100%; border-collapse: collapse; font-size: 0.84rem; margin: 0.75rem 0; }
+th, td { padding: 0.55rem 0.75rem; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { background: var(--accent-light); color: #1e3a8a; font-weight: 700; }
+tr:nth-child(even) td { background: var(--surface2); }
+.tag { display: inline-block; padding: 0.12rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; margin: 0.1rem; }
+.tag-blue { background: #dbeafe; color: #1d4ed8; }
+.tag-green { background: #dcfce7; color: #15803d; }
+.tag-red { background: #fee2e2; color: #b91c1c; }
+.tag-yellow { background: #fef3c7; color: #b45309; }
+.tag-gray { background: #f1f5f9; color: #64748b; }
+.tag-purple { background: #ede9fe; color: #6d28d9; }
+.flow { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; padding: 0.85rem 1rem; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; margin: 0.75rem 0; font-size: 0.84rem; }
+.flow-step { padding: 0.35rem 0.7rem; border-radius: 6px; background: #fff; border: 1px solid var(--border); }
+.flow-step.hl { background: #dbeafe; border-color: #93c5fd; font-weight: 700; color: #1d4ed8; }
+.arrow { color: #94a3b8; }
+.diagram { background: #0f172a; color: #cbd5e1; padding: 1rem; border-radius: 8px; font-family: Consolas, "Courier New", monospace; font-size: 0.76rem; line-height: 1.6; overflow-x: auto; white-space: pre; margin: 0.75rem 0; }
+.verdict { background: linear-gradient(135deg, #ecfdf5, #eff6ff); border: 1px solid #a7f3d0; border-radius: 10px; padding: 1.1rem 1.25rem; margin: 0.75rem 0; }
+.code { font-family: Consolas, monospace; font-size: 0.8rem; background: #f1f5f9; padding: 0.1rem 0.35rem; border-radius: 4px; color: #0f172a; }
+ul, ol { padding-left: 1.25rem; } li { margin-bottom: 0.3rem; }
+.footer { text-align: center; padding: 1.5rem; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--border); margin-top: 2rem; }
+.mock { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 0.85rem 1rem; font-family: Consolas, monospace; font-size: 0.74rem; line-height: 1.55; color: #475569; margin: 0.75rem 0; white-space: pre-wrap; }
+.compare-old { color: #94a3b8; text-decoration: line-through; }
+.compare-new { color: #15803d; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>📐 FDE管理平台 · 页面布局优化方案</h1>
+  <p>按角色简化导航、合并重复入口、聚焦每日高频操作 — 功能完备前提下的体验升级</p>
+  <div class="meta">
+    <span>📍 <strong>http://localhost:3456</strong></span>
+    <span>📄 <strong>/FDE管理平台布局优化方案.html</strong></span>
+    <span>📅 2026-07-12</span>
+    <span>✅ 已落地实现</span>
+  </div>
+</header>
+
+<div class="layout">
+<nav class="toc">
+  <div class="toc-title">目录</div>
+  <a href="#s1">1. 背景与目标</a>
+  <a href="#s2">2. 现状诊断</a>
+  <a href="#s3">3. 优化原则</a>
+  <a href="#s4">4. 信息架构（按角色）</a>
+  <a href="#s5">5. 核心页面设计</a>
+  <a href="#s6">6. 顶部栏与侧边栏</a>
+  <a href="#s7">7. 视觉与交互统一</a>
+  <a href="#s8">8. 实施分期</a>
+  <a href="#s9">9. 优化前后对比</a>
+  <a href="#s10">10. 实现映射</a>
+  <a href="#s11">11. 相关文档</a>
+</nav>
+
+<main>
+
+<h2 id="s1">1. 背景与目标</h2>
+<div class="verdict">
+  <strong>核心判断：</strong>FDE管理平台在任务四态流转、审核分配、AI 协作者、列表导出等方面<strong>功能已完备</strong>。当前主要痛点不在「缺能力」，而在<strong>入口过多、页面重叠、角色边界不清</strong>，导致不同职能人员难以快速找到「今天最该用的页面」。
+</div>
+<h3>优化目标</h3>
+<ul>
+  <li><strong>领导/审核人</strong>：登录即进入可操作的「任务中心」，一屏处理执行中 / 阻塞 / 归档 / 终止任务</li>
+  <li><strong>执行人员</strong>：聚焦「今日工作台」，每日只需提交进展、标记完成</li>
+  <li><strong>所有人</strong>：减少重复按钮与重复列表，保留全部后端能力与 API</li>
+</ul>
+
+<h2 id="s2">2. 现状诊断</h2>
+<h3>2.1 导航过多</h3>
+<table>
+  <thead><tr><th>角色</th><th>优化前侧边栏</th><th>主要问题</th></tr></thead>
+  <tbody>
+    <tr><td>领导/审核人</td><td>9 项</td><td>管理看板、流动看板、审核备案、归档查看信息高度重复</td></tr>
+    <tr><td>执行人员</td><td>4 项</td><td>流动看板与「我的工作台」边界模糊</td></tr>
+    <tr><td>多职能用户</td><td>三类能力叠加</td><td>不知默认从哪个页面开始一天的工作</td></tr>
+  </tbody>
+</table>
+
+<h3>2.2 功能页面重叠</h3>
+<div class="diagram">优化前页面关系（简化）
+
+  管理看板 ──→ 流动看板 ──→ 审核备案
+                  │              │
+                  └──────→ 归档查看
+  个人主页任务表 ≈ 流动看板列表 ≈ 审核备案卡片
+
+  顶部「站会/风险/新建」在管理看板、流动看板重复出现
+  侧边栏四态徽章 ≈ 管理看板统计 ≈ 流动看板筛选按钮</div>
+
+<h3>2.3 操作路径偏长</h3>
+<p>领导处理一个阻塞任务，优化前典型路径：</p>
+<div class="flow">
+  <span class="flow-step">管理看板</span><span class="arrow">→</span>
+  <span class="flow-step">流动看板</span><span class="arrow">→</span>
+  <span class="flow-step">筛选阻塞</span><span class="arrow">→</span>
+  <span class="flow-step">操作</span>
+</div>
+<p>执行人员每日核心动作仅两项：<strong>提交进展</strong>、<strong>标记完成</strong>，却分散在「我的工作台」与「流动看板」。</p>
+
+<h2 id="s3">3. 优化原则</h2>
+<div class="grid-2">
+  <div class="card"><h4>① 按角色给默认首页</h4><p>登录即进入该角色「今天最该用的页面」，而非统一仪表盘。</p></div>
+  <div class="card"><h4>② 一任务一入口</h4><p>同类任务列表只保留一处主战场，避免三处表格维护同一数据视图。</p></div>
+  <div class="card"><h4>③ 高频前置、低频折叠</h4><p>每日操作用大按钮；AI、团队、归档详情收进二级 Tab 或折叠区。</p></div>
+  <div class="card"><h4>④ 看与做分离</h4><p>「查看」用只读详情 + 每日进展时间线；「编辑/审核」保留独立入口。</p></div>
+  <div class="card card--ok" style="grid-column:1/-1"><h4>⑤ 不删能力，只合并入口</h4><p>后端 API、四态流转、权限模型、导出与 AI 引擎<strong>全部保留</strong>，仅调整前端路由与布局。</p></div>
+</div>
+
+<h2 id="s4">4. 信息架构（按角色）</h2>
+
+<h3>4.1 领导 / 审核人 <span class="tag tag-blue">4 个主入口</span></h3>
+<table>
+  <thead><tr><th>序号</th><th>新导航</th><th>合并/替代</th><th>定位</th><th>默认首页</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td><strong>📋 任务中心</strong></td><td>流动看板 + 审核备案 + 归档查看</td><td>统一列表/看板、四态筛选、导出、审核操作</td><td><span class="tag tag-green">是</span></td></tr>
+    <tr><td>2</td><td><strong>📊 概览</strong></td><td>原「管理看板」轻量化</td><td>四态数字、阻塞告警、最近动态、AI 洞察</td><td></td></tr>
+    <tr><td>3</td><td><strong>🧠 需求与 AI</strong></td><td>需求提交 + AI 助手</td><td>Tab：新建需求 / AI 工具（拆分、站会、风险、对话）</td><td></td></tr>
+    <tr><td>4</td><td><strong>👤 我的</strong></td><td>原「个人主页」精简</td><td>参与任务 + 参与审核任务 + 起止日期 + 下载</td><td></td></tr>
+  </tbody>
+</table>
+
+<h3>4.2 执行人员 <span class="tag tag-green">3 个主入口</span></h3>
+<table>
+  <thead><tr><th>序号</th><th>新导航</th><th>定位</th><th>默认首页</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td><strong>💼 今日工作台</strong></td><td>主执行/协助任务 + 一键提交进展 + 标记完成</td><td><span class="tag tag-green">是</span></td></tr>
+    <tr><td>2</td><td><strong>📤 提交需求</strong></td><td>Tab：快速提交 / 会议语音 / 提交记录</td><td></td></tr>
+    <tr><td>3</td><td><strong>👤 我的记录</strong></td><td>参与任务历史、进展查看、清单下载</td><td></td></tr>
+  </tbody>
+</table>
+<p>执行人员<strong>不再显示</strong>流动看板独立入口，避免与今日工作台职能重叠。</p>
+
+<h3>4.3 超级管理员</h3>
+<p>在领导方案基础上增加 <strong>👥 团队</strong> 入口（成员档案与工作量查看）。</p>
+
+<h3>4.4 旧入口兼容映射</h3>
+<table>
+  <thead><tr><th>旧页面 ID</th><th>新页面</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>kanban</code></td><td><code>taskcenter</code></td><td>自动跳转，保留列表/看板全部能力</td></tr>
+    <tr><td><code>review</code></td><td><code>taskcenter</code></td><td>跳转并预选「执行中」筛选</td></tr>
+    <tr><td><code>acceptance</code></td><td><code>taskcenter</code></td><td>跳转并预选「已归档」筛选</td></tr>
+    <tr><td><code>ai</code></td><td><code>demandai</code></td><td>跳转至「AI 工具」Tab</td></tr>
+    <tr><td><code>dashboard</code></td><td><code>dashboard</code></td><td>保留，文案改为「概览」</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s5">5. 核心页面设计</h2>
+
+<h3>5.1 任务中心（领导主战场）</h3>
+<div class="mock">┌─────────────────────────────────────────────────────────┐
+│  任务中心                    [站会摘要] [风险扫描] [+ 新建]  │  ← 仅顶部栏
+├─────────────────────────────────────────────────────────┤
+│  ⚠ 有 N 项阻塞任务待处理  [立即查看]                      │  ← 阻塞告警条
+├─────────────────────────────────────────────────────────┤
+│  [全部] [执行中] [阻塞] [已归档] [已终止]   审核人▼ 执行人▼ │
+│  [列表视图] [四列看板]                      [📥 导出清单]   │
+├─────────────────────────────────────────────────────────┤
+│  表格 / 看板（复用原 renderKanban 组件）                  │
+│  列：编号 · 名称 · 状态 · 人员 · 起止时间 · 可执行操作     │
+└─────────────────────────────────────────────────────────┘</div>
+<ul>
+  <li>四态 Tab 即原流动看板筛选，无需再进「审核备案」</li>
+  <li>列表「可执行操作」列保留：终止 / 二次分配 / 退回执行中 / 任务完成</li>
+  <li>有阻塞时侧边栏四态徽章高亮红色提醒</li>
+</ul>
+
+<h3>5.2 今日工作台（执行人员主战场）</h3>
+<div class="mock">┌─────────────────────────────────────────────────────────┐
+│  今日工作台                              [+ 上报进展]        │
+├─────────────────────────────────────────────────────────┤
+│  摘要条：待办 3 · 协助 1 · 今日未报进展 2 · [提交需求]    │
+├─────────────────────────────────────────────────────────┤
+│  ▼ 任务卡片（精简）                                       │
+│     标题 / 状态 / 最近进展一行                             │
+│     [今日进展输入框]                                       │
+│     [提交] [完成] [查看进展]                               │
+└─────────────────────────────────────────────────────────┘</div>
+
+<h3>5.3 需求与 AI（领导）</h3>
+<div class="flow">
+  <span class="flow-step hl">📤 新建需求</span>
+  <span class="flow-step hl">🤖 AI 工具</span>
+</div>
+<p>「新建需求」复用原需求提交表单 + AI 助手；「AI 工具」复用原 AI 助手页（拆分、站会、风险、对话、洞察历史）。</p>
+
+<h3>5.4 提交需求（执行人员）</h3>
+<div class="flow">
+  <span class="flow-step hl">📝 快速提交</span>
+  <span class="flow-step">🎙️ 会议/语音</span>
+  <span class="flow-step">📋 提交记录</span>
+</div>
+<p>默认展开「快速提交」表单；会议语音与 AI 拆解收入第二个 Tab，降低首屏复杂度。</p>
+
+<h3>5.5 我的 / 我的记录</h3>
+<ul>
+  <li>顶部<strong>摘要条</strong>：状态、进行中、协助、审核（领导）、阻塞数，一键跳转任务中心或工作台</li>
+  <li>两个任务表（参与任务、参与审核）默认各显示 <strong>5 条</strong>，可「展开全部」</li>
+  <li>「查看」打开只读详情，含<strong>每日进展提交记录</strong>时间线；支持单条下载</li>
+  <li>移除与任务中心重复的「手上任务 / 当前卡点」双栏卡片</li>
+</ul>
+
+<h2 id="s6">6. 顶部栏与侧边栏</h2>
+<table>
+  <thead><tr><th>区域</th><th>领导</th><th>执行人员</th></tr></thead>
+  <tbody>
+    <tr><td>顶部右侧</td><td>站会摘要 · 风险扫描 · + 新建</td><td>仅「+ 上报进展」→ 今日工作台</td></tr>
+    <tr><td>侧边栏底部徽章</td><td>点击 → 任务中心（全部）</td><td>点击 → 今日工作台</td></tr>
+    <tr><td>页面内二次按钮</td><td>去掉与管理看板/任务中心重复的站会、风险按钮</td><td>—</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s7">7. 视觉与交互统一</h2>
+<table>
+  <thead><tr><th>项目</th><th>优化前</th><th>优化后</th></tr></thead>
+  <tbody>
+    <tr><td>页面 Tab</td><td>各页自定义切换</td><td>统一 <code>.page-tabs</code> 组件</td></tr>
+    <tr><td>状态标签</td><td>多处样式略有差异</td><td>统一四态 Pill：执行中/阻塞/已归档/已终止</td></tr>
+    <tr><td>任务详情</td><td>查看与编辑混在同一弹窗</td><td>查看只读 + 领导可进编辑</td></tr>
+    <tr><td>阻塞提醒</td><td>仅数字展示</td><td>任务中心告警条 + 侧边栏徽章红色高亮</td></tr>
+    <tr><td>工作台卡片</td><td>字段多、表单占满屏</td><td>精简卡片 + 摘要条 + 一键提交</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s8">8. 实施分期</h2>
+<table>
+  <thead><tr><th>阶段</th><th>内容</th><th>状态</th></tr></thead>
+  <tbody>
+    <tr><td><strong>第一期</strong></td><td>导航收敛、任务中心、顶部栏去重、默认首页、旧路由兼容</td><td><span class="tag tag-green">已完成</span></td></tr>
+    <tr><td><strong>第二期</strong></td><td>今日工作台精简、提交需求 Tab 化、个人主页折叠与摘要条</td><td><span class="tag tag-green">已完成</span></td></tr>
+    <tr><td><strong>第三期（可选）</strong></td><td>侧栏可收起、表格列自定义、移动端响应式增强</td><td><span class="tag tag-gray">待规划</span></td></tr>
+  </tbody>
+</table>
+
+<h2 id="s9">9. 优化前后对比</h2>
+<h3>领导视角</h3>
+<table>
+  <thead><tr><th>维度</th><th>优化前</th><th>优化后</th></tr></thead>
+  <tbody>
+    <tr><td>侧边栏项数</td><td class="compare-old">9 项</td><td class="compare-new">4 项（+ 团队仅 admin）</td></tr>
+    <tr><td>默认首页</td><td class="compare-old">管理看板（偏统计）</td><td class="compare-new">任务中心（偏行动）</td></tr>
+    <tr><td>重复列表页</td><td class="compare-old">3 个</td><td class="compare-new">1 个</td></tr>
+    <tr><td>处理阻塞路径</td><td class="compare-old">2–3 次跨页点击</td><td class="compare-new">任务中心 → 阻塞 Tab → 操作</td></tr>
+    <tr><td>每日进展查看</td><td class="compare-old">需进编辑弹窗底部</td><td class="compare-new">「查看」直达时间线</td></tr>
+  </tbody>
+</table>
+
+<h3>执行人员视角</h3>
+<table>
+  <thead><tr><th>维度</th><th>优化前</th><th>优化后</th></tr></thead>
+  <tbody>
+    <tr><td>侧边栏项数</td><td class="compare-old">4 项</td><td class="compare-new">3 项</td></tr>
+    <tr><td>默认首页</td><td class="compare-old">我的工作台</td><td class="compare-new">今日工作台（精简卡片）</td></tr>
+    <tr><td>提交需求</td><td class="compare-old">会议+表单同屏</td><td class="compare-new">Tab 分离，默认快速提交</td></tr>
+    <tr><td>顶部按钮</td><td class="compare-old">站会 + 上报进度</td><td class="compare-new">仅「上报进展」</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s10">10. 实现映射（代码位置）</h2>
+<table>
+  <thead><tr><th>模块</th><th>文件</th><th>关键改动</th></tr></thead>
+  <tbody>
+    <tr><td>导航配置</td><td><code>server/auth.js</code></td><td><code>getNavForUser()</code>、<code>getDefaultView()</code> 按角色返回 3/4 项导航</td></tr>
+    <tr><td>会话默认页</td><td><code>server/index.js</code></td><td><code>/api/auth/me</code> 返回 <code>defaultView</code></td></tr>
+    <tr><td>任务中心</td><td><code>public/js/app.js</code></td><td><code>renderTaskCenter()</code>、<code>renderKanbanCore()</code></td></tr>
+    <tr><td>路由兼容</td><td><code>public/js/app.js</code></td><td><code>navigate()</code> 将 kanban/review/acceptance → taskcenter</td></tr>
+    <tr><td>需求与 AI</td><td><code>public/js/app.js</code></td><td><code>renderDemandAI()</code>、<code>setDemandAiTab()</code></td></tr>
+    <tr><td>今日工作台</td><td><code>public/js/app.js</code></td><td><code>renderMyWork()</code> 摘要条 + 精简卡片</td></tr>
+    <tr><td>提交需求 Tab</td><td><code>public/js/app.js</code></td><td><code>renderSubmit()</code>、<code>setSubmitTab()</code></td></tr>
+    <tr><td>个人主页</td><td><code>public/js/app.js</code></td><td>摘要条、表格限 5 条、<code>showTaskDetailView()</code> 进展时间线</td></tr>
+    <tr><td>样式</td><td><code>public/css/style.css</code></td><td><code>.page-tabs</code>、<code>.alert-banner</code>、<code>.work-summary-bar</code> 等</td></tr>
+  </tbody>
+</table>
+
+<h3>默认首页逻辑</h3>
+<div class="diagram">getDefaultView(user):
+  if 有 reviewer 能力或 role === admin  →  taskcenter
+  else if 有 executor 能力               →  mywork
+  else if 有 proposer 能力               →  submit
+  else                                   →  profile</div>
+
+<h2 id="s11">11. 相关文档</h2>
+<div class="grid-2">
+  <div class="card">
+    <h4>📘 完整开发方案</h4>
+    <p>功能模块、API、四态流转、AI 引擎等技术说明。</p>
+    <p><a href="/FDE管理平台开发方案.html">打开 FDE管理平台开发方案.html →</a></p>
+  </div>
+  <div class="card">
+    <h4>🔗 代码仓库</h4>
+    <p>GitHub 开源地址，含本次布局优化提交。</p>
+    <p><a href="https://github.com/Rabit11/FDE-" target="_blank" rel="noopener">github.com/Rabit11/FDE- →</a></p>
+  </div>
+  <div class="card">
+    <h4>🚀 本地访问</h4>
+    <p>启动 <code>npm start</code> 后访问平台与本文档。</p>
+    <p><a href="/">进入 FDE管理平台 →</a></p>
+  </div>
+  <div class="card">
+    <h4>📋 README</h4>
+    <p>快速启动、角色账号、环境配置说明。</p>
+    <p>见项目根目录 <code>README.md</code></p>
+  </div>
+</div>
+
+</main>
+</div>
+
+<footer class="footer">
+  FDE管理平台 · 页面布局优化方案 · 2026-07-12 · 与当前代码实现同步
+</footer>
+
+</body>
+</html>

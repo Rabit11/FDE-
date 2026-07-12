@@ -28,9 +28,14 @@ GitHub: **https://github.com/Rabit11/FDE-**
 
 ## 说明文档
 
-完整开发方案（HTML）：[`public/FDE管理平台开发方案.html`](public/FDE管理平台开发方案.html)
+| 文档 | 地址 |
+|------|------|
+| 完整开发方案 | [`public/FDE管理平台开发方案.html`](public/FDE管理平台开发方案.html) |
+| **布局优化方案** | [`public/FDE管理平台布局优化方案.html`](public/FDE管理平台布局优化方案.html) |
 
-启动后也可直接访问：**http://localhost:3456/FDE管理平台开发方案.html**
+启动后访问：
+- http://localhost:3456/FDE管理平台开发方案.html
+- http://localhost:3456/FDE管理平台布局优化方案.html
 
 ## 角色导航（优化后）
 
