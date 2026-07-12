@@ -52,6 +52,102 @@ async function processAllPendingSubmissions(actor = 'system') {
   return processed;
 }
 
+async function healIncompleteDispatchedItems(actor = 'system') {
+  const items = queries.getItems().filter(i =>
+    ['story', 'epic', 'task', 'bug'].includes(i.type) &&
+    i.status === 'in_progress' &&
+    !i.assignee &&
+    (i.ai_generated || i.created_by)
+  );
+  const healed = [];
+  for (const item of items) {
+    if (item.type === 'task' && item.parent_id) {
+      const parent = queries.getItem(item.parent_id);
+      if (parent?.assignee) {
+        const updated = queries.updateItem(item.id, {
+          assignee: parent.assignee,
+          assistants: parent.assistants || [],
+          reviewer: item.reviewer || parent.reviewer,
+          actor,
+        });
+        if (updated) healed.push(updated);
+        continue;
+      }
+    }
+    const reviewer = item.reviewer || item.created_by || actor;
+    const result = await assigner.intelligentAssign(item.id, item.team_size || 2);
+    if (!result?.primary) continue;
+    const updated = queries.updateItem(item.id, {
+      assignee: result.primary,
+      assistants: result.assistants || [],
+      reviewer,
+      team_size: item.team_size || 2,
+      actor,
+    });
+    if (updated) {
+      queries.logActivity(item.id, 'auto_assigned', `补全执行人 ${result.primary}${(result.assistants || []).length ? '，协助: ' + result.assistants.join('、') : ''}`, actor);
+      healed.push(updated);
+    }
+  }
+  queries.getItems().filter(i => i.type === 'task' && !i.assignee && i.parent_id).forEach(task => {
+    const parent = queries.getItem(task.parent_id);
+    if (!parent?.assignee) return;
+    const updated = queries.updateItem(task.id, {
+      assignee: parent.assignee,
+      assistants: parent.assistants || [],
+      reviewer: task.reviewer || parent.reviewer,
+      actor,
+    });
+    if (updated) healed.push(updated);
+  });
+  return healed;
+}
+
+function dispatchMetaForUser(user, extra = {}) {
+  const caps = user.capabilities || [];
+  const reviewer = extra.reviewer || (caps.includes('reviewer') ? user.name : null);
+  return {
+    created_by: user.name,
+    reviewer,
+    generate_req_no: true,
+    actor: user.name,
+    ...extra,
+  };
+}
+
+async function createDispatchedItem(data, user) {
+  const item = queries.createItem({
+    ...data,
+    ...dispatchMetaForUser(user, data),
+    status: data.status || 'in_progress',
+  });
+  if (item.assignee || !['story', 'epic'].includes(item.type)) return item;
+  const result = await assigner.intelligentAssign(item.id, data.team_size || 2);
+  if (!result?.primary) return item;
+  return queries.updateItem(item.id, {
+    assignee: result.primary,
+    assistants: result.assistants || [],
+    reviewer: item.reviewer || user.name,
+    team_size: data.team_size || 2,
+    actor: user.name,
+  }) || item;
+}
+
+function createChildTask(data, user, parent) {
+  return queries.createItem({
+    type: 'task',
+    priority: 3,
+    status: 'in_progress',
+    ...data,
+    ...dispatchMetaForUser(user, {
+      reviewer: parent?.reviewer || ((user.capabilities || []).includes('reviewer') ? user.name : null),
+      assignee: parent?.assignee || null,
+      assistants: parent?.assistants || [],
+      parent_id: parent?.id || data.parent_id,
+    }),
+  });
+}
+
 function checkReviewerAccess(item, user) {
   if (isLeader(user)) return true;
   return item.reviewer === user.name;
@@ -440,14 +536,15 @@ app.post('/api/ai/split-requirement', requirePermission('ai', 'ai_copilot', 'all
   const { text } = req.body;
   if (!text?.trim()) return res.status(400).json({ error: '请提供需求描述' });
   const result = await ai.splitRequirementSmart(text.trim());
-  const epic = queries.createItem({ ...result.epic, status: 'in_progress', created_by: req.user.name });
-  const createdStories = result.stories.map(s => {
-    return queries.createItem({ ...s, parent_id: epic.id, status: 'in_progress', created_by: req.user.name });
-  });
-  result.tasks.forEach(t => {
+  const epic = await createDispatchedItem({ ...result.epic, status: 'in_progress' }, req.user);
+  const createdStories = [];
+  for (const s of result.stories) {
+    createdStories.push(await createDispatchedItem({ ...s, parent_id: epic.id, status: 'in_progress' }, req.user));
+  }
+  for (const t of result.tasks) {
     const parent = createdStories.find(s => s.title === t.parent_title);
-    queries.createItem({ type: 'task', title: t.title, parent_id: parent?.id, status: 'in_progress', priority: 3, created_by: req.user.name });
-  });
+    createChildTask({ title: t.title }, req.user, parent);
+  }
   queries.saveInsight('split', 'AI 需求拆分', result.summary, 'info');
   res.json({ ...result, epic, stories: createdStories, engine: result.summary?.includes('LLM') ? 'llm' : 'local' });
 });
@@ -579,20 +676,20 @@ app.post('/api/ai/document/process', uploadDoc.single('document'), async (req, r
     let createdItems = { epic: null, stories: [], tasks: [] };
 
     if (req.body.autoCreate !== 'false') {
-      createdItems.epic = queries.createItem({
+      createdItems.epic = await createDispatchedItem({
         ...(data.epic || { type: 'epic', title: req.file.originalname, description: parsed.text.slice(0, 300) }),
-        status, created_by: req.user.name, ai_generated: 1,
+        status, ai_generated: 1,
         description: data.document?.slice(0, 500) || parsed.text.slice(0, 500),
-      });
-      createdItems.stories = (data.stories || []).map(s =>
-        queries.createItem({ ...s, type: 'story', parent_id: createdItems.epic.id, status, created_by: req.user.name, ai_generated: 1 })
-      );
-      (data.tasks || []).forEach(t => {
+      }, req.user);
+      for (const s of (data.stories || [])) {
+        createdItems.stories.push(await createDispatchedItem({
+          ...s, type: 'story', parent_id: createdItems.epic.id, status, ai_generated: 1,
+        }, req.user));
+      }
+      for (const t of (data.tasks || [])) {
         const parent = createdItems.stories.find(s => s.title === t.parent_title);
-        createdItems.tasks.push(queries.createItem({
-          type: 'task', title: t.title, parent_id: parent?.id, status: 'in_progress', priority: 3, created_by: req.user.name,
-        }));
-      });
+        createdItems.tasks.push(createChildTask({ title: t.title }, req.user, parent));
+      }
     }
 
     const cfg = llm.getConfig();
@@ -631,6 +728,8 @@ app.listen(PORT, async () => {
   try {
     const healed = await processAllPendingSubmissions('system');
     if (healed.length) console.log(`  🔄 已自动修复 ${healed.length} 个滞留待分配任务`);
+    const incomplete = await healIncompleteDispatchedItems('system');
+    if (incomplete.length) console.log(`  🔄 已补全 ${incomplete.length} 个缺失派发信息的历史任务`);
   } catch (e) {
     console.warn('  ⚠️ 启动时自动分配修复失败:', e.message);
   }

@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { v4: uuid } = require('uuid');
-const { SEED_USERS, hashPassword, LEADER_NAMES } = require('./auth');
+const { SEED_USERS, hashPassword, LEADER_NAMES, normalizeDept } = require('./auth');
 
 const dataDir = path.join(__dirname, '..', 'data');
 const dbFile = path.join(dataDir, 'platform.json');
@@ -36,10 +36,18 @@ function load() {
       i.status = 'in_progress';
       healed = true;
     }
-    if (!i.req_no && i.status === 'submitted') {
+    if (!i.req_no && (i.status === 'submitted' || (i.status === 'in_progress' && ['story', 'epic', 'task', 'bug'].includes(i.type)))) {
       const year = new Date(i.created_at || Date.now()).getFullYear();
       data.req_counter[year] = (data.req_counter[year] || 0) + 1;
       i.req_no = `REQ-${year}-${String(data.req_counter[year]).padStart(4, '0')}`;
+      healed = true;
+    }
+    if (!i.reviewer && i.created_by && data.users?.length) {
+      const creator = data.users.find(u => u.name === i.created_by);
+      if (creator && (creator.capabilities || []).includes('reviewer')) {
+        i.reviewer = i.created_by;
+        healed = true;
+      }
     }
     if (i.status === 'done' && i.acceptance_status === 'terminated') {
       i.status = 'terminated';
@@ -50,8 +58,25 @@ function load() {
       i.updated_at = new Date().toISOString();
       healed = true;
     }
+    if (i.type === 'task' && !i.assignee && i.parent_id) {
+      const parent = data.items.find(p => p.id === i.parent_id);
+      if (parent) {
+        if (parent.assignee && !i.assignee) { i.assignee = parent.assignee; healed = true; }
+        if ((parent.assistants || []).length && !(i.assistants || []).length) { i.assistants = parent.assistants; healed = true; }
+        if (!i.reviewer && parent.reviewer) { i.reviewer = parent.reviewer; healed = true; }
+      }
+    }
   });
   if (healed) save(data);
+  if (data.users?.length) {
+    data.users.forEach(u => {
+      const nextDept = normalizeDept(u.dept);
+      if (nextDept !== u.dept) {
+        u.dept = nextDept;
+        save(data);
+      }
+    });
+  }
   return data;
 }
 
@@ -87,6 +112,8 @@ function seedUsers(data) {
       u.can_view_profiles = true;
       u.role = u.role === 'executor' ? 'member' : u.role;
     }
+    if (u.dept === '管理部门') u.dept = '审核人';
+    if (u.dept === '执行团队' || u.dept === '执行部门') u.dept = '执行人';
     if (LEADER_NAMES.includes(u.name) || (u.role === 'manager' && (u.capabilities || []).includes('reviewer'))) {
       u.can_manage_users = false;
     }
@@ -153,8 +180,8 @@ let _data = seedIfEmpty(load());
 const queries = {
   _persist() { save(_data); },
 
-  getUsers() { return _data.users.map(({ password, ...u }) => u); },
-  getUserById(id) { const u = _data.users.find(x => x.id === id); if (!u) return null; const { password, ...safe } = u; return safe; },
+  getUsers() { return _data.users.map(({ password, ...u }) => ({ ...u, dept: normalizeDept(u.dept) })); },
+  getUserById(id) { const u = _data.users.find(x => x.id === id); if (!u) return null; const { password, ...safe } = u; return { ...safe, dept: normalizeDept(safe.dept) }; },
   getUserByName(name) { const u = _data.users.find(x => x.name === name); if (!u) return null; const { password, ...safe } = u; return safe; },
   getUsersRaw() { return _data.users; },
 

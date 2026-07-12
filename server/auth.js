@@ -8,6 +8,12 @@ const CAPABILITIES = {
 
 const LEADER_NAMES = ['曾锐', '林宇飞', '毛研勋', '张弛'];
 
+function normalizeDept(dept) {
+  if (dept === '管理部门') return '审核人';
+  if (dept === '执行团队' || dept === '执行部门') return '执行人';
+  return dept || '';
+}
+
 const NAV_ITEMS = {
   taskcenter: { id: 'taskcenter', label: '📋 任务中心', caps: ['reviewer'], roles: ['admin', 'manager'] },
   dashboard: { id: 'dashboard', label: '📊 概览', caps: ['reviewer'], roles: ['admin'] },
@@ -20,17 +26,17 @@ const NAV_ITEMS = {
 
 const SEED_USERS = [
   { emp_id: '666666', name: 'admin', password: 'aiic@2026', role: 'admin', dept: '系统管理', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: true },
-  { emp_id: '600412', name: '曾锐', password: '600412', role: 'manager', dept: '管理部门', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
-  { emp_id: '600764', name: '张弛', password: '600764', role: 'manager', dept: '管理部门', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
-  { emp_id: '600471', name: '林宇飞', password: '600471', role: 'manager', dept: '管理部门', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
-  { emp_id: '600664', name: '毛研勋', password: '600664', role: 'manager', dept: '管理部门', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
-  { emp_id: '600785', name: '赵立泽', password: '600785', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
-  { emp_id: '600831', name: '王诗瑶', password: '600831', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
-  { emp_id: '600838', name: '万贤书', password: '600838', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
-  { emp_id: '600932', name: '刘紫薇', password: '600932', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
-  { emp_id: '601247', name: '王紫薇', password: '601247', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
-  { emp_id: '601308', name: '杨会冉', password: '601308', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
-  { emp_id: '609107', name: '杨子豪', password: '609107', role: 'member', dept: '执行团队', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600412', name: '曾锐', password: '600412', role: 'manager', dept: '审核人', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600764', name: '张弛', password: '600764', role: 'manager', dept: '审核人', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600471', name: '林宇飞', password: '600471', role: 'manager', dept: '审核人', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600664', name: '毛研勋', password: '600664', role: 'manager', dept: '审核人', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600785', name: '赵立泽', password: '600785', role: 'member', dept: '执行人', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600831', name: '王诗瑶', password: '600831', role: 'member', dept: '执行人', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600838', name: '万贤书', password: '600838', role: 'member', dept: '执行人', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '600932', name: '刘紫薇', password: '600932', role: 'member', dept: '执行人', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '601247', name: '王紫薇', password: '601247', role: 'member', dept: '执行人', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '601308', name: '杨会冉', password: '601308', role: 'member', dept: '执行人', capabilities: ['proposer', 'executor'], can_manage_users: false },
+  { emp_id: '609107', name: '杨子豪', password: '609107', role: 'member', dept: '执行人', capabilities: ['proposer', 'executor'], can_manage_users: false },
 ];
 
 const sessions = new Map();
@@ -59,7 +65,7 @@ function getNavForUser(user) {
 
   if (isReviewer) {
     nav.push({ id: 'taskcenter', label: '📋 任务中心' });
-    nav.push({ id: 'dashboard', label: user.role === 'admin' ? '📊 全局概览' : '📊 概览' });
+    nav.push({ id: 'dashboard', label: '📊 全局看板' });
     nav.push({ id: 'demandai', label: user.role === 'admin' ? '🧠 需求与 AI 中心' : '🧠 需求与 AI' });
     nav.push({ id: 'profile', label: '👤 我的' });
     if (user.role === 'admin') nav.push({ id: 'team', label: '👥 团队' });
@@ -68,12 +74,14 @@ function getNavForUser(user) {
 
   if (caps.includes('executor')) {
     nav.push({ id: 'mywork', label: '💼 今日工作台' });
+    nav.push({ id: 'taskcenter', label: '📋 任务中心' });
     if (caps.includes('proposer')) nav.push({ id: 'submit', label: '📤 提交需求' });
     nav.push({ id: 'profile', label: '👤 我的记录' });
     return nav;
   }
 
   if (caps.includes('proposer')) nav.push({ id: 'submit', label: '📤 提交需求' });
+  nav.push({ id: 'taskcenter', label: '📋 任务中心' });
   nav.push({ id: 'profile', label: '👤 我的' });
   return nav;
 }
@@ -96,6 +104,7 @@ function sanitizeUser(user) {
   const { password, ...safe } = user;
   return {
     ...safe,
+    dept: normalizeDept(safe.dept),
     roleLabel: getRoleLabel(user),
     nav: getNavForUser(user),
     defaultView: getDefaultView(user),
@@ -162,6 +171,6 @@ function requirePermission(...perms) {
 }
 
 module.exports = {
-  CAPABILITIES, NAV_ITEMS, SEED_USERS, LEADER_NAMES, hashPassword, login, logout, getSessionUser,
+  CAPABILITIES, NAV_ITEMS, SEED_USERS, LEADER_NAMES, normalizeDept, hashPassword, login, logout, getSessionUser,
   hasPermission, authMiddleware, requirePermission, sanitizeUser, getNavForUser, getRoleLabel, getDefaultView, isLeader,
 };

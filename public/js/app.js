@@ -24,9 +24,22 @@ function flowCategory(item) {
   return 'in_progress';
 }
 
-let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], userReviewProjects: [], currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'list', demandAiTab: 'submit', submitTab: 'quick', profileShowAll: false };
+let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], userReviewProjects: [], currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'list', demandAiTab: 'submit', submitTab: 'quick', profileShowAll: false, globalKanbanUpdatedAt: null };
+
+let globalKanbanTimer = null;
 
 function getToken() { return localStorage.getItem('agileai_token'); }
+
+function userDeptLabel(u) {
+  const dept = u?.dept || '';
+  if (dept === '管理部门') return '审核人';
+  if (dept === '执行团队' || dept === '执行部门') return '执行人';
+  return dept;
+}
+
+function normalizeUsers(users = []) {
+  return users.map(u => ({ ...u, dept: userDeptLabel(u) }));
+}
 
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
@@ -43,6 +56,10 @@ function isReviewerUser() {
 }
 
 function isLeaderUser() {
+  return isReviewerUser();
+}
+
+function canModifyKanban() {
   return isReviewerUser();
 }
 
@@ -88,7 +105,7 @@ async function loadData() {
   const results = await Promise.all(fetches);
   const [items, metrics, activity, insights, users] = results;
   const myWorkItems = isExecutor ? (results[5] || []) : [];
-  state = { ...state, items, myWorkItems, metrics, activity, insights, users };
+  state = { ...state, items, myWorkItems, metrics, activity, insights, users: normalizeUsers(users) };
   updateWorkflowBadge();
 }
 
@@ -153,23 +170,20 @@ function closeModal() {
 
 // ── Renderers ──
 function flowListActionsHtml(item) {
-  const parts = [];
-  if (isLeaderUser()) {
-    const cat = flowCategory(item);
-    if (cat === 'in_progress') {
-      parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--danger" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">⏹ 终止执行</button>`);
-    }
-    if (cat === 'blocked') {
-      parts.push(`<button type="button" class="btn btn-primary btn-sm flow-list-action" onclick="event.stopPropagation();showReassignModal('${item.id}')">🔄 二次分配</button>`);
-    }
-    if (cat === 'done' || cat === 'terminated') {
-      parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--warn" onclick="event.stopPropagation();reviewerRevoke('${item.id}')">↩ 退回执行中</button>`);
-    }
+  const parts = [
+    `<button type="button" class="btn btn-ghost btn-sm flow-list-action" onclick="event.stopPropagation();showTaskDetailView('${item.id}')">详情</button>`,
+  ];
+  if (!canModifyKanban()) return `<div class="flow-list-actions">${parts.join('')}</div>`;
+  const cat = flowCategory(item);
+  if (cat === 'in_progress') {
+    parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--danger" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">终止</button>`);
   }
-  if (isMyWorkItem(item) && (ACTIVE_STATUSES.includes(item.status) || item.status === 'blocked')) {
-    parts.push(`<button type="button" class="btn btn-success btn-sm flow-list-action" onclick="event.stopPropagation();completeTask('${item.id}')">✅ 任务完成</button>`);
+  if (cat === 'blocked') {
+    parts.push(`<button type="button" class="btn btn-primary btn-sm flow-list-action" onclick="event.stopPropagation();showReassignModal('${item.id}')">分配</button>`);
   }
-  if (!parts.length) return '<span class="flow-list-empty">-</span>';
+  if (cat === 'done' || cat === 'terminated') {
+    parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--warn" onclick="event.stopPropagation();reviewerRevoke('${item.id}')">退回</button>`);
+  }
   return `<div class="flow-list-actions">${parts.join('')}</div>`;
 }
 
@@ -201,11 +215,7 @@ function renderTaskCard(item) {
     item.blocked_reason ? `<span class="task-card-blocker">${BLOCKER_ICONS[item.blocker_type] || '🚧'} ${esc(item.blocked_reason)}</span>` : '',
     blockerLabel && item.status === 'blocked' ? `<span class="blocker-tag">${blockerLabel}</span>` : '',
   ].filter(Boolean).join('');
-  const actions = [
-    isMyWorkItem(item) && (ACTIVE_STATUSES.includes(item.status) || item.status === 'blocked')
-      ? `<button type="button" class="btn btn-success btn-sm task-card-btn" onclick="event.stopPropagation();completeTask('${item.id}')">✅ 完成</button>` : '',
-    leaderActionsHtml(item),
-  ].filter(Boolean).join('');
+  const actions = leaderActionsHtml(item);
 
   return `<div class="task-card ${item.status === 'blocked' ? 'blocked' : ''} ${isReviewer ? '' : 'readonly'}" draggable="${draggable}" data-id="${item.id}">
     <div class="task-card-top">
@@ -233,8 +243,7 @@ function goTaskCenter(flow = 'all', mode = 'list') {
 }
 
 function goWorkflowBadge() {
-  if (isReviewerUser()) goTaskCenter('all');
-  else navigate('mywork');
+  goTaskCenter('all');
 }
 
 function setDemandAiTab(tab) {
@@ -253,9 +262,7 @@ function toggleProfileShowAll() {
 }
 
 function kanbanBaseItems() {
-  const items = isReviewerUser()
-    ? state.items.filter(i => i.req_no || i.reviewer || i.assignee)
-    : state.items.filter(i => isMyWorkItem(i));
+  const items = state.items.filter(i => i.req_no || i.reviewer || i.assignee);
   return items.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
 }
 
@@ -316,16 +323,16 @@ function setKanbanViewMode(mode) {
 function renderKanbanListRow(item) {
   const meta = projectStatusMeta(item);
   const assist = (item.assistants || []).length ? item.assistants.map(esc).join('、') : '-';
-  return `<tr class="flow-list-row" onclick="showItemDetail('${item.id}')">
-    <td>${item.req_no ? `<span class="req-no-tag">${esc(item.req_no)}</span>` : '<span class="flow-list-empty">-</span>'}</td>
-    <td class="flow-list-title"><strong>${esc(item.title)}</strong></td>
-    <td><span class="project-status-pill ${meta.cls}">${meta.label}</span></td>
-    <td>${esc(item.created_by || '-')}</td>
-    <td>${esc(item.reviewer || '-')}</td>
-    <td>${esc(item.assignee || '-')}</td>
-    <td>${assist}</td>
-    <td class="flow-list-time">${fmtTime(item.created_at) || '-'}</td>
-    <td class="flow-list-time">${fmtTime(item.updated_at) || '-'}</td>
+  return `<tr class="flow-list-row" onclick="showTaskDetailView('${item.id}')">
+    <td class="flow-list-cell flow-list-col-no">${item.req_no ? `<span class="req-no-tag req-no-tag--sm">${esc(item.req_no)}</span>` : '<span class="flow-list-empty">-</span>'}</td>
+    <td class="flow-list-title" title="${esc(item.title)}">${esc(item.title)}</td>
+    <td class="flow-list-cell flow-list-col-status"><span class="project-status-pill project-status-pill--sm ${meta.cls}">${meta.label}</span></td>
+    <td class="flow-list-cell flow-list-col-person">${esc(item.created_by || '-')}</td>
+    <td class="flow-list-cell flow-list-col-person">${esc(item.reviewer || '-')}</td>
+    <td class="flow-list-cell flow-list-col-person">${esc(item.assignee || '-')}</td>
+    <td class="flow-list-cell flow-list-col-person" title="${esc(assist)}">${assist}</td>
+    <td class="flow-list-cell flow-list-time">${fmtTime(item.created_at) || '-'}</td>
+    <td class="flow-list-cell flow-list-time">${fmtTime(item.updated_at) || '-'}</td>
     <td class="flow-list-action-cell" onclick="event.stopPropagation()">${flowListActionsHtml(item)}</td>
   </tr>`;
 }
@@ -334,10 +341,15 @@ function renderKanbanListHtml(items) {
   if (!items.length) return '<div class="empty-state" style="padding:2rem">暂无符合条件的任务</div>';
   return `<div class="project-table-wrap flow-list-wrap">
     <table class="project-table flow-list-table">
+      <colgroup>
+        <col class="flow-list-w-no"><col class="flow-list-w-title"><col class="flow-list-w-status">
+        <col class="flow-list-w-person"><col class="flow-list-w-person"><col class="flow-list-w-person"><col class="flow-list-w-person">
+        <col class="flow-list-w-time"><col class="flow-list-w-time"><col class="flow-list-w-action">
+      </colgroup>
       <thead><tr>
-        <th>任务编号</th><th>任务名称</th><th>状态</th>
-        <th>需求提出人</th><th>审核人</th><th>主执行人</th><th>其他执行人</th>
-        <th>开始时间</th><th>最近更新时间</th><th>可执行操作</th>
+        <th>编号</th><th>任务名称</th><th>状态</th>
+        <th>提出人</th><th>审核人</th><th>主执行</th><th>协助人</th>
+        <th>开始</th><th>更新</th><th>操作</th>
       </tr></thead>
       <tbody>${items.map(renderKanbanListRow).join('')}</tbody>
     </table>
@@ -371,12 +383,13 @@ function exportKanbanList() {
     .map(row => row.map(csvCell).join(','))
     .join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const stamp = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `任务中心清单_${stamp}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlobFile(blob, buildExportFileName({
+    category: '任务中心',
+    tags: kanbanFilterTags(),
+    exporter: state.user?.name,
+    count: filtered.length,
+    ext: 'csv',
+  }));
   toast(`已导出 ${filtered.length} 条任务`);
 }
 
@@ -443,11 +456,141 @@ function renderKanbanBoard(items) {
 }
 
 function renderDashboard() {
-  if (isReviewerUser()) return renderLeaderDashboard();
+  if (isReviewerUser()) return renderGlobalKanban();
   return renderExecutorDashboard();
 }
 
-function renderLeaderDashboard() {
+function parseItemDeadline(item) {
+  const m = (item.description || '').match(/期望[：:]\s*(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
+function ganttEndDate(item) {
+  if (item.completed_at) return new Date(item.completed_at);
+  const dl = parseItemDeadline(item);
+  if (dl) return new Date(`${dl}T23:59:59`);
+  const sp = item.story_points || 3;
+  return new Date(new Date(item.created_at).getTime() + sp * 2 * 86400000);
+}
+
+function fmtDateShort(d) {
+  const x = d instanceof Date ? d : new Date(d);
+  return `${x.getMonth() + 1}/${x.getDate()}`;
+}
+
+function buildMemberActivity(days = 7) {
+  const since = Date.now() - days * 86400000;
+  const map = {};
+  const bump = (name, kind) => {
+    if (!name) return;
+    if (!map[name]) map[name] = { name, actions: 0, progress: 0, score: 0 };
+    map[name][kind] += 1;
+    map[name].score += kind === 'progress' ? 3 : 1;
+  };
+  state.activity.forEach(a => {
+    if (new Date(a.created_at).getTime() >= since) bump(a.actor, 'actions');
+  });
+  workflowItems().forEach(item => {
+    (item.progress_updates || []).forEach(u => {
+      const t = u.created_at ? new Date(u.created_at) : (u.date ? new Date(`${u.date}T12:00:00`) : null);
+      if (t && !Number.isNaN(t.getTime()) && t.getTime() >= since) bump(u.user, 'progress');
+    });
+  });
+  const maxScore = Math.max(1, ...Object.values(map).map(m => m.score));
+  return Object.values(map).sort((a, b) => b.score - a.score).map(m => ({ ...m, pct: Math.round((m.score / maxScore) * 100) }));
+}
+
+function buildWorkloadStats() {
+  const items = workflowItems().filter(i => flowCategory(i) === 'in_progress' || i.status === 'blocked');
+  const map = {};
+  const touch = (name, kind) => {
+    if (!name) return;
+    if (!map[name]) map[name] = { name, primary: 0, assist: 0, blocked: 0, points: 0 };
+    map[name][kind] += 1;
+  };
+  items.forEach(i => {
+    touch(i.assignee, 'primary');
+    if (i.status === 'blocked') touch(i.assignee, 'blocked');
+    if (i.assignee) map[i.assignee].points += i.story_points || 0;
+    (i.assistants || []).forEach(a => touch(a, 'assist'));
+  });
+  return Object.values(map).sort((a, b) => (b.primary + b.assist) - (a.primary + a.assist));
+}
+
+function buildGanttRows(limit = 14) {
+  const items = workflowItems()
+    .filter(i => i.req_no && flowCategory(i) !== 'terminated')
+    .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''))
+    .slice(0, limit);
+  if (!items.length) return { items: [], rangeStart: new Date(), rangeEnd: new Date(), totalMs: 1 };
+
+  const now = Date.now();
+  let minT = now - 7 * 86400000;
+  let maxT = now + 14 * 86400000;
+  items.forEach(i => {
+    const s = new Date(i.created_at).getTime();
+    const e = ganttEndDate(i).getTime();
+    minT = Math.min(minT, s);
+    maxT = Math.max(maxT, e);
+  });
+  const pad = 2 * 86400000;
+  const rangeStart = new Date(minT - pad);
+  const rangeEnd = new Date(maxT + pad);
+  const totalMs = Math.max(rangeEnd - rangeStart, 86400000);
+
+  const rows = items.map(i => {
+    const start = new Date(i.created_at).getTime();
+    const end = ganttEndDate(i).getTime();
+    const cat = flowCategory(i);
+    const color = FLOW_COLS.find(c => c.id === cat)?.color || '#64748b';
+    return {
+      id: i.id,
+      title: i.title,
+      reqNo: i.req_no,
+      assignee: i.assignee || '-',
+      cat,
+      color,
+      left: ((start - rangeStart) / totalMs) * 100,
+      width: Math.max(2, ((end - start) / totalMs) * 100),
+      overdue: cat === 'in_progress' && end < now,
+    };
+  });
+
+  return { items: rows, rangeStart, rangeEnd, totalMs, nowPct: ((now - rangeStart) / totalMs) * 100 };
+}
+
+function renderGanttTicks(rangeStart, rangeEnd) {
+  const ticks = [];
+  const days = Math.ceil((rangeEnd - rangeStart) / 86400000);
+  const step = days <= 14 ? 1 : days <= 28 ? 2 : 7;
+  for (let i = 0; i <= days; i += step) {
+    const d = new Date(rangeStart.getTime() + i * 86400000);
+    const left = (i / days) * 100;
+    ticks.push(`<span class="gk-gantt-tick" style="left:${left}%">${fmtDateShort(d)}</span>`);
+  }
+  return ticks.join('');
+}
+
+function renderMiniKanbanSnapshot() {
+  const base = workflowItems();
+  return `<div class="gk-mini-board">${FLOW_COLS.map(col => {
+    const cards = base.filter(i => flowCategory(i) === col.id).slice(0, 4);
+    return `<div class="gk-mini-col" data-status="${col.id}">
+      <div class="gk-mini-col-head" style="border-top:3px solid ${col.color}">
+        <span>${col.label}</span><span class="count">${base.filter(i => flowCategory(i) === col.id).length}</span>
+      </div>
+      <div class="gk-mini-cards">
+        ${cards.map(i => `<div class="gk-mini-card" onclick="showItemDetail('${i.id}')" title="${esc(i.title)}">
+          ${i.req_no ? `<span class="req-no-tag">${esc(i.req_no)}</span>` : ''}
+          <div class="gk-mini-title">${esc(i.title)}</div>
+          <div class="gk-mini-meta">${esc(i.assignee || '-')} · ${projectStatusMeta(i).label}</div>
+        </div>`).join('') || '<div class="gk-mini-empty">暂无</div>'}
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function renderGlobalKanbanBody() {
   const m = state.metrics;
   const counts = {
     in_progress: state.items.filter(i => flowCategory(i) === 'in_progress').length,
@@ -457,6 +600,10 @@ function renderLeaderDashboard() {
   };
   const total = counts.in_progress + counts.blocked + counts.done + counts.terminated || 1;
   const wipPct = Math.min(100, Math.round((counts.in_progress / WIP_LIMITS.in_progress) * 100));
+  const members = buildMemberActivity(7);
+  const workloads = buildWorkloadStats();
+  const gantt = buildGanttRows();
+  const updated = state.globalKanbanUpdatedAt || new Date();
 
   const flowCards = FLOW_COLS.map(col => {
     const count = counts[col.id];
@@ -482,62 +629,172 @@ function renderLeaderDashboard() {
     reviewer_revoke: '↩', confirmed: '✔️',
   }[action] || '•');
 
+  const memberBars = members.length ? members.slice(0, 8).map(mem => {
+    const heat = mem.pct >= 70 ? 'hot' : mem.pct >= 35 ? 'warm' : 'cool';
+    return `<div class="gk-member-row">
+      <div class="gk-member-name">${esc(mem.name)}</div>
+      <div class="gk-member-bar-wrap"><div class="gk-member-bar gk-member-bar--${heat}" style="width:${mem.pct}%"></div></div>
+      <div class="gk-member-stats"><span title="操作">${mem.actions}</span>/<span title="进展">${mem.progress}</span></div>
+    </div>`;
+  }).join('') : '<div class="empty-state">近7日暂无活动记录</div>';
+
+  const workloadRows = workloads.length ? workloads.slice(0, 8).map(w => `<div class="gk-workload-row">
+    <span class="gk-workload-name">${esc(w.name)}</span>
+    <span class="gk-workload-chip">主 ${w.primary}</span>
+    <span class="gk-workload-chip">协 ${w.assist}</span>
+    ${w.blocked ? `<span class="gk-workload-chip gk-workload-chip--danger">阻 ${w.blocked}</span>` : ''}
+    <span class="gk-workload-sp">${w.points} SP</span>
+  </div>`).join('') : '<div class="empty-state">暂无进行中任务</div>';
+
+  const ganttBody = gantt.items.length ? gantt.items.map(r => `<div class="gk-gantt-row">
+    <div class="gk-gantt-label" onclick="showItemDetail('${r.id}')" title="${esc(r.title)}">
+      <span class="req-no-tag">${esc(r.reqNo)}</span>
+      <span class="gk-gantt-task">${esc(r.title)}</span>
+      <span class="gk-gantt-assignee">${esc(r.assignee)}</span>
+    </div>
+    <div class="gk-gantt-track">
+      <div class="gk-gantt-bar ${r.overdue ? 'gk-gantt-bar--overdue' : ''}" style="left:${r.left}%;width:${r.width}%;background:${r.color}" title="${projectStatusMeta({ status: r.cat === 'done' ? 'done' : r.cat === 'blocked' ? 'blocked' : 'in_progress' }).label}"></div>
+      <div class="gk-gantt-today" style="left:${gantt.nowPct}%"></div>
+    </div>
+  </div>`).join('') : '<div class="empty-state" style="padding:1.5rem">暂无甘特图数据</div>';
+
   return `
-    <div class="dashboard">
-      <div class="dashboard-flow-strip">
-        <span class="flow-step">📤 需求提交</span>
-        <span class="flow-arrow">→</span>
-        <span class="flow-step">🔍 自动审核分配</span>
-        <span class="flow-arrow">→</span>
-        <span class="flow-step active">⚡ 执行中</span>
-        <span class="flow-arrow">→</span>
-        <span class="flow-step warn">🚧 阻塞处理</span>
-        <span class="flow-arrow">→</span>
-        <span class="flow-step done">📦 已归档</span>
-        <span class="flow-arrow">·</span>
-        <span class="flow-step terminated">⏹ 已终止</span>
+    <div class="dashboard-flow-strip">
+      <span class="flow-step">📤 需求提交</span><span class="flow-arrow">→</span>
+      <span class="flow-step">🔍 自动审核分配</span><span class="flow-arrow">→</span>
+      <span class="flow-step active">⚡ 执行中</span><span class="flow-arrow">→</span>
+      <span class="flow-step warn">🚧 阻塞处理</span><span class="flow-arrow">→</span>
+      <span class="flow-step done">📦 已归档</span><span class="flow-arrow">·</span>
+      <span class="flow-step terminated">⏹ 已终止</span>
+    </div>
+
+    <div class="dashboard-summary">
+      <div class="dashboard-flow-cards">${flowCards}</div>
+      <div class="dashboard-kpi-strip">
+        <div class="kpi-chip"><span class="kpi-label">近14天吞吐量</span><strong>${m.throughput}</strong><span class="kpi-unit">项</span></div>
+        <div class="kpi-chip"><span class="kpi-label">平均 Lead Time</span><strong>${m.avgLeadTime}</strong><span class="kpi-unit">天</span></div>
+        <div class="kpi-chip"><span class="kpi-label">WIP 使用率</span><strong>${wipPct}%</strong><span class="kpi-unit">${counts.in_progress}/${WIP_LIMITS.in_progress}</span></div>
+        <div class="kpi-chip ${counts.blocked ? 'kpi-alert' : ''}"><span class="kpi-label">待处理阻塞</span><strong>${counts.blocked}</strong><span class="kpi-unit">项</span></div>
       </div>
+    </div>
 
-      <div class="dashboard-summary">
-        <div class="dashboard-flow-cards">${flowCards}</div>
-        <div class="dashboard-kpi-strip">
-          <div class="kpi-chip"><span class="kpi-label">近14天吞吐量</span><strong>${m.throughput}</strong><span class="kpi-unit">项</span></div>
-          <div class="kpi-chip"><span class="kpi-label">平均 Lead Time</span><strong>${m.avgLeadTime}</strong><span class="kpi-unit">天</span></div>
-          <div class="kpi-chip"><span class="kpi-label">WIP 使用率</span><strong>${wipPct}%</strong><span class="kpi-unit">${counts.in_progress}/${WIP_LIMITS.in_progress}</span></div>
-          <div class="kpi-chip ${counts.blocked ? 'kpi-alert' : ''}"><span class="kpi-label">待处理阻塞</span><strong>${counts.blocked}</strong><span class="kpi-unit">项</span></div>
-        </div>
-        <p class="dashboard-kanban-hint" style="margin-top:0.75rem;color:var(--muted);font-size:0.82rem">点击上方状态卡片或侧边栏「任务中心」进入任务处理</p>
+    <div class="gk-triple-grid">
+      <div class="dashboard-panel gk-panel">
+        <div class="gk-panel-head"><span class="section-title">👥 人员活跃程度</span><span class="gk-panel-sub">近 7 日 · 操作/进展</span></div>
+        <div class="gk-member-list">${memberBars}</div>
       </div>
-
-      <div class="dashboard-body">
-        <div class="dashboard-panel">
-          <div class="section-title">最近动态</div>
-          <div class="activity-timeline">
-            ${state.activity.slice(0, 6).map(a => `
-              <div class="activity-timeline-item">
-                <span class="activity-icon">${activityIcon(a.action)}</span>
-                <div class="activity-body">
-                  <div class="activity-title"><strong>${esc(a.item_title || '系统')}</strong></div>
-                  <div class="activity-detail">${esc(a.detail)}</div>
-                  <div class="activity-time">${fmtTime(a.created_at)} · ${esc(a.actor || '')}</div>
-                </div>
-              </div>`).join('') || '<div class="empty-state">暂无活动</div>'}
-          </div>
+      <div class="dashboard-panel gk-panel">
+        <div class="gk-panel-head"><span class="section-title">📊 任务态势</span><span class="gk-panel-sub">进行中负载</span></div>
+        <div class="gk-workload-list">${workloadRows}</div>
+      </div>
+      <div class="dashboard-panel gk-panel">
+        <div class="gk-panel-head"><span class="section-title">🔴 实时动态</span><span class="gk-live-dot"></span></div>
+        <div class="activity-timeline gk-activity-compact">
+          ${state.activity.slice(0, 5).map(a => `
+            <div class="activity-timeline-item">
+              <span class="activity-icon">${activityIcon(a.action)}</span>
+              <div class="activity-body">
+                <div class="activity-title"><strong>${esc(a.item_title || '系统')}</strong></div>
+                <div class="activity-detail">${esc(a.detail)}</div>
+                <div class="activity-time">${fmtTime(a.created_at)} · ${esc(a.actor || '')}</div>
+              </div>
+            </div>`).join('') || '<div class="empty-state">暂无动态</div>'}
         </div>
+      </div>
+    </div>
 
-        <div class="dashboard-panel dashboard-insights-panel">
-          <div class="section-title">最新 AI 洞察</div>
-          <div class="insight-grid">
-            ${state.insights.slice(0, 3).map(i => `
-              <div class="insight-card ${i.severity}">
-                <div class="insight-card-title">${esc(i.title)}</div>
-                <div class="insight-card-time">${fmtTime(i.created_at)}</div>
-                <div class="insight-card-content">${esc(i.content.slice(0, 120))}${i.content.length > 120 ? '…' : ''}</div>
-              </div>`).join('') || '<div class="empty-state">点击「站会摘要」或「风险扫描」生成 AI 洞察</div>'}
-          </div>
+    <div class="dashboard-panel gk-gantt-panel">
+      <div class="gk-panel-head">
+        <span class="section-title">📅 项目甘特图</span>
+        <span class="gk-panel-sub">${fmtDateShort(gantt.rangeStart)} — ${fmtDateShort(gantt.rangeEnd)} · 竖线=今日</span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('all','board')">任务中心 →</button>
+      </div>
+      <div class="gk-gantt">
+        <div class="gk-gantt-axis">
+          <div class="gk-gantt-label-col">任务 / 执行人</div>
+          <div class="gk-gantt-ticks">${renderGanttTicks(gantt.rangeStart, gantt.rangeEnd)}</div>
+        </div>
+        ${ganttBody}
+      </div>
+    </div>
+
+    <div class="dashboard-panel gk-mini-panel">
+      <div class="gk-panel-head">
+        <span class="section-title">📋 四态流动快照</span>
+        <span class="gk-panel-sub">点击卡片查看详情 · 每列最多 4 项</span>
+      </div>
+      ${renderMiniKanbanSnapshot()}
+    </div>
+
+    <div class="dashboard-body">
+      <div class="dashboard-panel">
+        <div class="section-title">最近动态</div>
+        <div class="activity-timeline">
+          ${state.activity.slice(0, 8).map(a => `
+            <div class="activity-timeline-item">
+              <span class="activity-icon">${activityIcon(a.action)}</span>
+              <div class="activity-body">
+                <div class="activity-title"><strong>${esc(a.item_title || '系统')}</strong></div>
+                <div class="activity-detail">${esc(a.detail)}</div>
+                <div class="activity-time">${fmtTime(a.created_at)} · ${esc(a.actor || '')}</div>
+              </div>
+            </div>`).join('') || '<div class="empty-state">暂无活动</div>'}
+        </div>
+      </div>
+      <div class="dashboard-panel dashboard-insights-panel">
+        <div class="section-title">最新 AI 洞察</div>
+        <div class="insight-grid">
+          ${state.insights.slice(0, 3).map(i => `
+            <div class="insight-card ${i.severity}">
+              <div class="insight-card-title">${esc(i.title)}</div>
+              <div class="insight-card-time">${fmtTime(i.created_at)}</div>
+              <div class="insight-card-content">${esc(i.content.slice(0, 120))}${i.content.length > 120 ? '…' : ''}</div>
+            </div>`).join('') || '<div class="empty-state">点击「站会摘要」或「风险扫描」生成 AI 洞察</div>'}
         </div>
       </div>
     </div>`;
+}
+
+function renderGlobalKanban() {
+  state.globalKanbanUpdatedAt = new Date();
+  const ts = state.globalKanbanUpdatedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return `<div class="dashboard global-kanban">
+    <div class="gk-live-bar">
+      <span class="gk-live-badge"><span class="gk-live-dot"></span> 动态刷新</span>
+      <span class="gk-live-meta" id="gk-last-updated">更新于 ${ts}</span>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="refreshGlobalKanban(true)">↻ 立即刷新</button>
+    </div>
+    <div id="global-kanban-root">${renderGlobalKanbanBody()}</div>
+  </div>`;
+}
+
+function stopGlobalKanbanPolling() {
+  if (globalKanbanTimer) { clearInterval(globalKanbanTimer); globalKanbanTimer = null; }
+}
+
+async function refreshGlobalKanban(manual = false) {
+  if (state.currentView !== 'dashboard' || !isReviewerUser()) return;
+  try {
+    await loadData();
+    state.globalKanbanUpdatedAt = new Date();
+    const root = document.getElementById('global-kanban-root');
+    if (root) root.innerHTML = renderGlobalKanbanBody();
+    const meta = document.getElementById('gk-last-updated');
+    if (meta && state.globalKanbanUpdatedAt) {
+      meta.textContent = `更新于 ${state.globalKanbanUpdatedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${manual ? ' · 手动' : ''}`;
+    }
+    updateWorkflowBadge();
+  } catch { /* ignore polling errors */ }
+}
+
+function startGlobalKanbanPolling() {
+  stopGlobalKanbanPolling();
+  if (state.currentView !== 'dashboard' || !isReviewerUser()) return;
+  globalKanbanTimer = setInterval(() => refreshGlobalKanban(false), 15000);
+}
+
+function renderLeaderDashboard() {
+  return renderGlobalKanban();
 }
 
 function renderExecutorDashboard() {
@@ -586,10 +843,13 @@ function renderKanbanCore() {
 
 function renderTaskCenter() {
   const blocked = state.items.filter(i => i.status === 'blocked').length;
-  const alert = blocked
-    ? `<div class="alert-banner">🚧 当前有 <strong>${blocked}</strong> 项阻塞任务待处理 <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('blocked')">立即查看</button></div>`
+  const blockedAlert = blocked
+    ? `<div class="alert-banner">🚧 当前有 <strong>${blocked}</strong> 项阻塞任务${canModifyKanban() ? '待处理' : ''} <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('blocked')">立即查看</button></div>`
     : '';
-  return `${alert}${renderKanbanCore()}`;
+  const readonlyHint = canModifyKanban()
+    ? ''
+    : '<div class="alert-banner alert-banner--info">👁️ 任务中心全员可见；执行人员仅可查看任务与进展，状态变更请在「今日工作台」提交进展后由领导处理</div>';
+  return `${readonlyHint}${blockedAlert}${renderKanbanCore()}`;
 }
 
 function renderKanban() {
@@ -740,7 +1000,7 @@ function renderSubmitFormFields() {
       <div class="form-group"><label>审核人</label>
         <select id="reqReviewer" style="width:100%;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
           <option value="">请选择审核人</option>
-          ${reviewers.map(r => `<option value="${esc(r.name)}">${esc(r.name)} (${esc(r.dept || '')})</option>`).join('')}
+          ${reviewers.map(r => `<option value="${esc(r.name)}">${esc(r.name)} (${esc(userDeptLabel(r))})</option>`).join('')}
         </select>
       </div>
       <div class="form-group"><label>工作需要人数</label>
@@ -750,7 +1010,7 @@ function renderSubmitFormFields() {
       </div>
       <div class="form-group"><label>主执行人员（多选，第一位为主执行）</label>
         <select id="reqExecutors" multiple size="5" style="width:100%;padding:0.35rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
-          ${executors.map(e => `<option value="${esc(e.name)}">${esc(e.name)} (${esc(e.dept || '')})</option>`).join('')}
+          ${executors.map(e => `<option value="${esc(e.name)}">${esc(e.name)} (${esc(userDeptLabel(e))})</option>`).join('')}
         </select>
       </div>
       <button class="btn btn-primary" onclick="submitRequirement()">📤 提交需求</button>
@@ -967,14 +1227,16 @@ function exportProfileTaskList(kind) {
     .map(row => row.map(csvCell).join(','))
     .join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const stamp = new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
-  const label = kind === 'review' ? '参与审核任务' : '参与任务';
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `${label}清单_${stamp}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-  toast(`已导出 ${rows.length} 条${label}`);
+  const owner = state.profileUser?.name || state.user?.name;
+  const category = kind === 'review' ? '参与审核任务' : '参与任务';
+  downloadBlobFile(blob, buildExportFileName({
+    category,
+    tags: owner ? [owner] : [],
+    exporter: state.user?.name,
+    count: rows.length,
+    ext: 'csv',
+  }));
+  toast(`已导出 ${rows.length} 条${category}`);
 }
 
 function buildTaskDetailText(item) {
@@ -1067,12 +1329,7 @@ function downloadTaskDetail(id) {
   if (!item) return toast('任务不存在', 'error');
   const text = buildTaskDetailText(item);
   const blob = new Blob(['\uFEFF' + text], { type: 'text/plain;charset=utf-8;' });
-  const name = `${item.req_no || '任务'}_${(item.title || '详情').replace(/[\\/:*?"<>|]/g, '_')}.txt`;
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlobFile(blob, buildTaskDetailFileName(item));
   toast('任务详情已下载');
 }
 
@@ -1083,8 +1340,9 @@ function renderProfile() {
   const p = u?.profile || {};
   const projects = state.userProjects || [];
   const reviewProjects = state.userReviewProjects || [];
-  const tasks = state.items.filter(i => i.assignee === u?.name && !['done', 'terminated'].includes(i.status));
-  const assistTasks = state.items.filter(i => (i.assistants || []).includes(u?.name));
+  const activeParticipating = projects.filter(p => !['done', 'terminated'].includes(p.status));
+  const assigneeTasks = state.items.filter(i => i.assignee === u?.name && !['done', 'terminated'].includes(i.status));
+  const assistTasks = state.items.filter(i => (i.assistants || []).includes(u?.name) && !['done', 'terminated'].includes(i.status));
 
   const blockedItems = projects.filter(p => p.status === 'blocked');
 
@@ -1093,18 +1351,20 @@ function renderProfile() {
       <div class="profile-avatar-lg">${(u?.name || '?').slice(0,1)}</div>
       <div>
         <h2>${esc(u?.name)} ${isSelf ? '' : `<button class="btn btn-ghost btn-sm" onclick="state.profileUserId=null;navigate('profile')">← 返回</button>`}</h2>
-        <p style="color:var(--muted)">工号 ${u?.emp_id} · ${u?.dept || ''}</p>
+        <p style="color:var(--muted)">工号 ${u?.emp_id} · ${userDeptLabel(u)}</p>
         <div style="margin-top:0.35rem">${(u?.capabilityLabels || []).map(c => `<span class="cap-tag">${esc(c)}</span>`).join('')}</div>
       </div>
     </div>
 
     <div class="profile-summary-bar card">
       <span>状态 <strong>${{available:'🟢 空闲',limited:'🟡 有限',busy:'🔴 繁忙'}[p.availability] || '未知'}</strong></span>
-      <span>进行中 <strong>${tasks.length}</strong></span>
+      <span>进行中 <strong>${activeParticipating.length}</strong></span>
+      <span>主执行 <strong>${assigneeTasks.length}</strong></span>
       <span>协助 <strong>${assistTasks.length}</strong></span>
       ${isReviewerUser() ? `<span>审核 <strong>${reviewProjects.length}</strong></span>` : ''}
       ${blockedItems.length ? `<span class="profile-summary-danger">阻塞 <strong>${blockedItems.length}</strong></span>` : ''}
-      ${isReviewerUser() ? `<button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('all')">任务中心 →</button>` : `<button type="button" class="btn btn-ghost btn-sm" onclick="navigate('mywork')">工作台 →</button>`}
+      <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('all')">任务中心 →</button>
+      ${!isReviewerUser() ? `<button type="button" class="btn btn-ghost btn-sm" onclick="navigate('mywork')">工作台 →</button>` : ''}
     </div>
 
     ${renderProfileProjectTable(projects, {
@@ -1133,7 +1393,7 @@ function renderTeam() {
           <div class="team-info">
             <div class="team-name">${esc(u.name)}</div>
             <div class="team-meta">${(u.capabilityLabels || []).join(' · ')} · 进行中 ${workload} 项</div>
-            <div class="team-meta">工号 ${u.emp_id} · ${u.dept || ''}</div>
+            <div class="team-meta">工号 ${u.emp_id} · ${userDeptLabel(u)}</div>
           </div>
         </div>`;
       }).join('')}
@@ -1386,7 +1646,7 @@ async function navigate(view) {
   state.currentView = view;
   document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
   const titles = {
-    taskcenter: '任务中心', dashboard: isReviewerUser() ? '概览' : '仪表盘',
+    taskcenter: '任务中心', dashboard: isReviewerUser() ? '全局看板' : '仪表盘',
     demandai: '需求与 AI', mywork: '今日工作台', submit: '提交需求',
     profile: isReviewerUser() ? '我的' : '我的记录', team: '团队',
     kanban: '任务中心', review: '任务中心', acceptance: '任务中心', ai: '需求与 AI',
@@ -1402,7 +1662,8 @@ async function navigate(view) {
   }
   if (view === 'profile') {
     const uid = state.profileUserId || state.user?.id;
-    state.profileUser = await api(`/users/${uid}`);
+    const profile = await api(`/users/${uid}`);
+    state.profileUser = { ...profile, dept: userDeptLabel(profile) };
     state.userProjects = await api(`/users/${uid}/projects`);
     state.userReviewProjects = await api(`/users/${uid}/review-projects`);
   }
@@ -1412,6 +1673,8 @@ async function navigate(view) {
     kanban: renderTaskCenter, review: renderTaskCenter, acceptance: renderTaskCenter, ai: renderDemandAI,
   };
   document.getElementById('content').innerHTML = renderers[view] ? renderers[view]() : '<div class="empty-state">页面不存在</div>';
+  if (view === 'dashboard' && isReviewerUser()) startGlobalKanbanPolling();
+  else stopGlobalKanbanPolling();
   if (view === 'taskcenter' && state.kanbanViewMode === 'board') initDragDrop();
   if (view === 'submit' || (view === 'demandai' && state.demandAiTab === 'submit')) initSubmitPage();
 }
@@ -1539,7 +1802,7 @@ function showReassignModal(id) {
     <div class="form-group"><label>新主执行人</label>
       <select id="reassignPrimary" style="width:100%;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
         <option value="">请选择</option>
-        ${executors.map(e => `<option value="${esc(e.name)}" ${e.name === item.assignee ? 'selected' : ''}>${esc(e.name)} (${esc(e.dept || '')})</option>`).join('')}
+        ${executors.map(e => `<option value="${esc(e.name)}" ${e.name === item.assignee ? 'selected' : ''}>${esc(e.name)} (${esc(userDeptLabel(e))})</option>`).join('')}
       </select>
     </div>
     <div class="form-group"><label>协助人员（可多选）</label>
@@ -2072,7 +2335,7 @@ async function initApp() {
   if (!getToken()) { location.href = '/login.html'; return; }
   try {
     const me = await api('/auth/me');
-    state.user = me.user;
+    state.user = { ...me.user, dept: userDeptLabel(me.user) };
     state.roleConfig = me.roleConfig;
     state.llmEnabled = me.llmEnabled;
     state.aiStatus = me.ai;
@@ -2095,6 +2358,67 @@ function fmtExportTime(t) {
 function csvCell(v) {
   const s = String(v ?? '');
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function sanitizeFileNamePart(value, maxLen = 24) {
+  const s = String(value ?? '').trim()
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  if (!s) return '';
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
+
+function exportTimestamp() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function kanbanFilterTags() {
+  const f = state.kanbanFilter || { flow: 'all', reviewer: '', executor: '' };
+  const flowLabels = { all: '全部', in_progress: '执行中', blocked: '阻塞', done: '已归档', terminated: '已终止' };
+  const tags = [flowLabels[f.flow] || '全部'];
+  if (f.reviewer) tags.push(`审核${f.reviewer}`);
+  if (f.executor) tags.push(`执行${f.executor}`);
+  return tags;
+}
+
+function buildExportFileName({ category, tags = [], exporter, count, ext = 'csv' }) {
+  const parts = ['FDE', sanitizeFileNamePart(category, 32)];
+  tags.forEach(tag => {
+    const part = sanitizeFileNamePart(tag, 20);
+    if (part) parts.push(part);
+  });
+  if (exporter) {
+    const exp = sanitizeFileNamePart(exporter, 12);
+    if (exp) parts.push(`导出人${exp}`);
+  }
+  parts.push(exportTimestamp());
+  if (count != null) parts.push(`${count}条`);
+  return `${parts.join('_')}.${ext}`;
+}
+
+function buildTaskDetailFileName(item) {
+  const tags = [
+    item.req_no || '无编号',
+    item.title || '任务详情',
+  ];
+  return buildExportFileName({
+    category: '任务详情',
+    tags,
+    exporter: state.user?.name,
+    ext: 'txt',
+  });
+}
+
+function downloadBlobFile(blob, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // ── Init ──

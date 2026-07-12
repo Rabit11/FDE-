@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>登录 · FDE管理平台</title>
-  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/style.css?v=3.1">
   <style>
     body {
       overflow: auto;
@@ -13,11 +13,11 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #eef4fc;
+      background: #e8eef6;
       background-image:
-        radial-gradient(ellipse 80% 60% at 15% 10%, rgba(37, 99, 235, 0.12), transparent),
-        radial-gradient(ellipse 70% 50% at 85% 90%, rgba(8, 145, 178, 0.1), transparent),
-        linear-gradient(180deg, #f8fbff 0%, #edf3fb 50%, #e8f0fa 100%);
+        radial-gradient(ellipse 90% 70% at 10% 5%, rgba(45, 93, 168, 0.16), transparent),
+        radial-gradient(ellipse 70% 55% at 90% 95%, rgba(245, 208, 97, 0.1), transparent),
+        linear-gradient(165deg, #f0f4fa 0%, #e8eef6 45%, #dce8f5 100%);
     }
     .login-page {
       width: 100%;
@@ -25,11 +25,12 @@
       padding: 1.5rem;
     }
     .login-card {
-      background: #fff;
-      border: 1px solid rgba(216, 228, 242, 0.9);
-      border-radius: 16px;
-      padding: 2.25rem 2rem 1.75rem;
-      box-shadow: 0 20px 50px rgba(15, 46, 91, 0.1), 0 1px 0 rgba(255,255,255,0.8) inset;
+      background: rgba(255, 255, 255, 0.94);
+      border: 1px solid rgba(226, 232, 240, 0.95);
+      border-radius: 20px;
+      padding: 2.35rem 2rem 1.85rem;
+      box-shadow: 0 24px 56px rgba(15, 23, 42, 0.1);
+      backdrop-filter: blur(12px);
     }
     .login-brand {
       text-align: center;
@@ -39,20 +40,23 @@
       width: 56px;
       height: 56px;
       margin: 0 auto;
-      border-radius: 14px;
-      background: linear-gradient(145deg, #3b82f6, #2563eb);
+      border-radius: 16px;
+      background: linear-gradient(135deg, #5ba4c9 0%, #2d5da8 48%, #1a3a6e 100%);
       color: #fff;
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 1.65rem;
-      box-shadow: 0 14px 28px rgba(37, 99, 235, 0.28);
+      box-shadow: 0 16px 32px rgba(45, 93, 168, 0.35), 0 8px 20px rgba(245, 208, 97, 0.15);
     }
     .login-brand h1 {
       font-size: 1.55rem;
       font-weight: 800;
       margin: 0.85rem 0 0.3rem;
-      color: #153e75;
+      background: linear-gradient(135deg, #0f1a2e 0%, #2d5da8 55%, #f5d061 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
       letter-spacing: 0.02em;
     }
     .login-brand p {
@@ -76,8 +80,8 @@
     .login-form input:hover { background: #fff; border-color: #b8cce8; }
     .login-form input:focus {
       background: #fff;
-      border-color: #2563eb;
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+      border-color: #2d5da8;
+      box-shadow: 0 0 0 3px rgba(45, 93, 168, 0.15);
     }
     .login-submit {
       width: 100%;
@@ -226,7 +230,9 @@
       </div>
 
       <div class="login-docs">
-        <a href="/FDE管理平台布局优化方案.html" target="_blank">📐 布局优化方案</a>
+        <a href="/FDE模型API接入技术方案.html" target="_blank">📡 API 接入</a>
+        <a href="/FDE先进智能模型框架.html" target="_blank">🧠 模型框架</a>
+        <a href="/FDE管理平台布局优化方案.html" target="_blank">📐 布局方案</a>
         <a href="/FDE管理平台开发方案.html" target="_blank">📘 开发文档</a>
       </div>
 

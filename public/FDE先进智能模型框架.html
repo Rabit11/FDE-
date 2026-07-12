@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FDE管理平台 · 先进智能模型框架</title>
+<style>
+:root {
+  --bg: #0b1220;
+  --bg2: #111827;
+  --surface: #151f33;
+  --surface2: #1a2740;
+  --border: #2a3f66;
+  --text: #e8eef8;
+  --muted: #8ba3c7;
+  --accent: #3b82f6;
+  --accent2: #06b6d4;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --purple: #a78bfa;
+  --pink: #f472b6;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.75;
+  font-size: 15px;
+}
+.hero {
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 0%, rgba(59,130,246,.35), transparent),
+    radial-gradient(ellipse 60% 50% at 80% 20%, rgba(6,182,212,.25), transparent),
+    linear-gradient(180deg, #0f1a30 0%, var(--bg) 100%);
+  padding: 3rem 2rem 2.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.hero-inner { max-width: 1320px; margin: 0 auto; }
+.hero-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: rgba(59,130,246,.15);
+  border: 1px solid rgba(59,130,246,.35);
+  color: #93c5fd;
+  margin-bottom: 1rem;
+}
+.hero h1 {
+  font-size: 2.2rem;
+  font-weight: 800;
+  background: linear-gradient(135deg, #fff 0%, #93c5fd 50%, #67e8f9 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 0.6rem;
+}
+.hero p { color: var(--muted); max-width: 780px; font-size: 1.02rem; }
+.hero-meta { margin-top: 1.25rem; display: flex; flex-wrap: wrap; gap: 1.25rem; font-size: 0.84rem; color: var(--muted); }
+.hero-meta a { color: #93c5fd; text-decoration: none; }
+.hero-meta a:hover { text-decoration: underline; }
+.hero-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.25rem; }
+.chip {
+  padding: 0.3rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.chip-llm { border-color: rgba(59,130,246,.5); color: #93c5fd; }
+.chip-asr { border-color: rgba(6,182,212,.5); color: #67e8f9; }
+.chip-rag { border-color: rgba(167,139,250,.5); color: #c4b5fd; }
+.chip-agent { border-color: rgba(244,114,182,.5); color: #f9a8d4; }
+
+.layout { display: flex; max-width: 1320px; margin: 0 auto; }
+nav.toc {
+  width: 260px; flex-shrink: 0;
+  padding: 1.5rem 1rem 2rem;
+  position: sticky; top: 0; align-self: flex-start;
+  max-height: 100vh; overflow-y: auto;
+  border-right: 1px solid var(--border);
+}
+nav.toc .toc-title { font-size: 0.7rem; font-weight: 700; color: var(--muted); margin: 1rem 0 0.35rem 0.6rem; text-transform: uppercase; letter-spacing: 0.06em; }
+nav.toc a { display: block; padding: 0.38rem 0.65rem; font-size: 0.82rem; color: var(--muted); text-decoration: none; border-radius: 6px; }
+nav.toc a:hover { background: var(--surface2); color: #93c5fd; }
+
+main { flex: 1; padding: 1.75rem 2rem 3rem; min-width: 0; }
+h2 { font-size: 1.4rem; margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); color: #f1f5f9; }
+h2:first-child { margin-top: 0; }
+h3 { font-size: 1.05rem; margin: 1.15rem 0 0.6rem; color: #93c5fd; }
+h4 { font-size: 0.92rem; margin: 0.85rem 0 0.4rem; color: #67e8f9; }
+p, li { color: #cbd5e1; }
+ul, ol { padding-left: 1.25rem; }
+li { margin-bottom: 0.35rem; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.15rem 1.3rem;
+  margin-bottom: 0.9rem;
+}
+.card--glow {
+  background: linear-gradient(135deg, rgba(59,130,246,.08), rgba(6,182,212,.05));
+  border-color: rgba(59,130,246,.3);
+}
+.card--purple { background: linear-gradient(135deg, rgba(167,139,250,.1), rgba(59,130,246,.05)); border-color: rgba(167,139,250,.3); }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.9rem; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.9rem; }
+@media (max-width: 960px) {
+  .layout { flex-direction: column; }
+  nav.toc { width: 100%; position: static; max-height: none; }
+  .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+}
+
+table { width: 100%; border-collapse: collapse; font-size: 0.84rem; margin: 0.75rem 0; }
+th, td { padding: 0.6rem 0.8rem; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { background: var(--surface2); color: #93c5fd; font-weight: 700; }
+tr:nth-child(even) td { background: rgba(26,39,64,.5); }
+
+.tag { display: inline-block; padding: 0.12rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; margin: 0.1rem; }
+.tag-blue { background: rgba(59,130,246,.2); color: #93c5fd; }
+.tag-cyan { background: rgba(6,182,212,.2); color: #67e8f9; }
+.tag-green { background: rgba(34,197,94,.2); color: #86efac; }
+.tag-purple { background: rgba(167,139,250,.2); color: #c4b5fd; }
+.tag-yellow { background: rgba(245,158,11,.2); color: #fcd34d; }
+.tag-red { background: rgba(239,68,68,.2); color: #fca5a5; }
+.tag-gray { background: rgba(148,163,184,.15); color: #94a3b8; }
+
+.arch, .diagram {
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 0.76rem;
+  background: #060d18;
+  color: #a5b4fc;
+  padding: 1.1rem 1.3rem;
+  border-radius: 10px;
+  overflow-x: auto;
+  line-height: 1.6;
+  white-space: pre;
+  margin: 0.85rem 0;
+  border: 1px solid var(--border);
+}
+.code { font-family: Consolas, monospace; font-size: 0.8rem; background: var(--surface2); padding: 0.12rem 0.4rem; border-radius: 4px; color: #93c5fd; }
+
+.layer-stack { display: flex; flex-direction: column; gap: 0.5rem; margin: 1rem 0; }
+.layer {
+  display: flex; align-items: stretch; gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+}
+.layer-num {
+  width: 2rem; height: 2rem; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; font-weight: 800; font-size: 0.85rem;
+}
+.layer-l4 .layer-num { background: rgba(244,114,182,.2); color: #f9a8d4; }
+.layer-l3 .layer-num { background: rgba(167,139,250,.2); color: #c4b5fd; }
+.layer-l2 .layer-num { background: rgba(59,130,246,.2); color: #93c5fd; }
+.layer-l1 .layer-num { background: rgba(6,182,212,.2); color: #67e8f9; }
+.layer-body h4 { margin: 0 0 0.2rem; color: #f1f5f9; }
+.layer-body p { margin: 0; font-size: 0.84rem; color: var(--muted); }
+
+.pipeline {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem;
+  padding: 1rem; background: var(--surface2); border-radius: 10px; border: 1px solid var(--border);
+  margin: 0.85rem 0; font-size: 0.82rem;
+}
+.pipe-step {
+  padding: 0.45rem 0.8rem; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.pipe-step.hl { border-color: rgba(59,130,246,.5); background: rgba(59,130,246,.12); color: #93c5fd; font-weight: 600; }
+.pipe-arrow { color: #475569; font-size: 1rem; }
+
+.metric-card {
+  text-align: center; padding: 1rem;
+  background: var(--surface2); border-radius: 10px; border: 1px solid var(--border);
+}
+.metric-card .val { font-size: 1.6rem; font-weight: 800; color: #93c5fd; }
+.metric-card .lbl { font-size: 0.78rem; color: var(--muted); margin-top: 0.2rem; }
+
+.verdict {
+  background: linear-gradient(135deg, rgba(59,130,246,.12), rgba(6,182,212,.08));
+  border: 1px solid rgba(59,130,246,.35);
+  border-radius: 12px;
+  padding: 1.2rem 1.35rem;
+  margin: 0.85rem 0;
+}
+.verdict strong { color: #93c5fd; }
+
+.compare-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; margin: 0.85rem 0; }
+.compare-col { padding: 1rem; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); }
+.compare-col h4 { margin: 0 0 0.5rem; font-size: 0.88rem; }
+.compare-col.winner { border-color: rgba(34,197,94,.4); background: rgba(34,197,94,.06); }
+.compare-col.winner h4 { color: #86efac; }
+@media (max-width: 768px) { .compare-row { grid-template-columns: 1fr; } }
+
+.footer { text-align: center; padding: 2rem; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <div class="hero-badge">FDE AI ENGINE v2.0 · 2026</div>
+    <h1>⚡ 先进智能模型框架</h1>
+    <p>面向敏捷任务管理的<strong>多模态感知 → 大模型认知 → Agent 决策 → 业务执行</strong>四层架构。融合 DeepSeek 推理、DashScope 语音、RAG 实时上下文与双引擎降级，实现从会议纪要到任务落地的端到端智能化。</p>
+    <div class="hero-chips">
+      <span class="chip chip-llm">🧠 DeepSeek-V3 / Reasoner</span>
+      <span class="chip chip-asr">🎙️ Paraformer 多引擎 ASR</span>
+      <span class="chip chip-rag">📚 RAG 实时项目上下文</span>
+      <span class="chip chip-agent">🤖 Intent Agent 多轮对话</span>
+    </div>
+    <div class="hero-meta">
+      <span>📍 平台：<strong>http://localhost:3456</strong></span>
+      <span>📄 本文档：<strong>/FDE先进智能模型框架.html</strong></span>
+      <span>📅 2026-07-12</span>
+      <span>🔗 <a href="/FDE管理平台开发方案.html">开发方案</a> · <a href="/FDE管理平台布局优化方案.html">布局方案</a></span>
+    </div>
+  </div>
+</header>
+
+<div class="layout">
+<nav class="toc">
+  <div class="toc-title">目录</div>
+  <a href="#overview">1. 框架总览</a>
+  <a href="#layers">2. 四层架构</a>
+  <a href="#models">3. 模型矩阵</a>
+  <a href="#multimodal">4. 多模态管线</a>
+  <a href="#agent">5. Agent 框架</a>
+  <a href="#engines">6. 双引擎策略</a>
+  <a href="#capabilities">7. 能力地图</a>
+  <a href="#modules">8. 代码模块</a>
+  <a href="#config">9. 环境配置</a>
+  <a href="#compare">10. 业界对比</a>
+  <a href="#roadmap">11. 演进路线</a>
+</nav>
+
+<main>
+
+<section id="overview">
+  <h2>1. 框架总览</h2>
+  <div class="verdict">
+    <strong>设计原则：</strong>不依赖单一模型供应商；感知层（语音/文档）与认知层（LLM）解耦；所有 AI 能力均具备<strong>规则引擎降级</strong>，确保无 Key 时平台仍可运行；输出结构化 JSON 直接驱动业务流程（拆分 → 分配 → 看板流转）。
+  </div>
+
+  <div class="grid-4">
+    <div class="metric-card"><div class="val">8</div><div class="lbl">AI 核心模块</div></div>
+    <div class="metric-card"><div class="val">3</div><div class="lbl">LLM 供应商路由</div></div>
+    <div class="metric-card"><div class="val">6+</div><div class="lbl">Agent 意图类型</div></div>
+    <div class="metric-card"><div class="val">2</div><div class="lbl">引擎降级链路</div></div>
+  </div>
+
+  <div class="diagram">┌─────────────────────────────────────────────────────────────────────────┐
+│                        FDE 先进智能模型框架 (AIMF)                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│  用户入口                                                                │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
+│  │ 快速提交  │  │ 会议语音  │  │ 文档上传  │  │ AI 工具  │  │ 站会/风险 │  │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  │
+│       │             │             │             │             │         │
+│       └─────────────┴──────┬──────┴─────────────┴─────────────┘         │
+│                            ▼                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ L1 感知层  ASR(paraformer) · DocParse · 敏捷热词校正 · 分段转写   │    │
+│  └───────────────────────────────┬─────────────────────────────────┘    │
+│                                  ▼                                     │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ L2 认知层  DeepSeek-Chat · DeepSeek-Reasoner · Qwen-Max 路由     │    │
+│  │           JSON Schema 输出 · 会议→需求解析 · Epic/Story 拆分      │    │
+│  └───────────────────────────────┬─────────────────────────────────┘    │
+│                                  ▼                                     │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ L3 决策层  RAG 上下文注入 · Intent 检测 · 智能分配评分 · Agent    │    │
+│  └───────────────────────────────┬─────────────────────────────────┘    │
+│                                  ▼                                     │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ L4 执行层  任务创建 · 自动派单 · 看板四态 · 进展时间线 · 审计日志  │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────┘</div>
+</section>
+
+<section id="layers">
+  <h2>2. 四层架构详解</h2>
+  <div class="layer-stack">
+    <div class="layer layer-l1">
+      <div class="layer-num">L1</div>
+      <div class="layer-body">
+        <h4>感知层 Perception — 多模态输入理解</h4>
+        <p>语音（Paraformer-v2 主引擎 + SenseVoice 降级）、文档（PDF/Word/TXT/MD 多遍解析）、纯文本会议纪要。输出统一 Markdown 会议记录，经敏捷热词校正提升领域准确率。</p>
+      </div>
+    </div>
+    <div class="layer layer-l2">
+      <div class="layer-num">L2</div>
+      <div class="layer-body">
+        <h4>认知层 Cognition — 大模型推理与结构化</h4>
+        <p>DeepSeek-Chat 承担日常拆分/对话；DeepSeek-Reasoner 处理复杂规划；通义千问 Qwen-Max 作为国产备选。强制 JSON 输出驱动下游 API，温度参数按场景调优（拆分 0.3 / 对话 0.5 / 创意 0.7）。</p>
+      </div>
+    </div>
+    <div class="layer layer-l3">
+      <div class="layer-num">L3</div>
+      <div class="layer-body">
+        <h4>决策层 Decision — RAG + Agent + 算法</h4>
+        <p>实时注入看板数据、团队负载、阻塞项、个人技能画像；Intent 路由 8 类意图；智能分配采用「技能匹配 + 负载均衡 + 可用性」三维评分，LLM 增强推荐理由。</p>
+      </div>
+    </div>
+    <div class="layer layer-l4">
+      <div class="layer-num">L4</div>
+      <div class="layer-body">
+        <h4>执行层 Action — 业务闭环</h4>
+        <p>AI 拆解结果一键填入需求表单；自动审核备案并派单；执行人每日进展写入时间线；领导四态操作（终止/二次分配/退回）与 AI 洞察联动。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="models">
+  <h2>3. 模型矩阵</h2>
+  <table>
+    <thead>
+      <tr><th>层级</th><th>模型 / 引擎</th><th>供应商</th><th>核心能力</th><th>触发场景</th><th>降级方案</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="tag tag-cyan">感知</span></td>
+        <td><code class="code">paraformer-v2</code><br><code class="code">sensevoice-v1</code></td>
+        <td>阿里云 DashScope</td>
+        <td>多格式音频转写、分段时间戳、热词增强</td>
+        <td>会议录音、语音需求、AI 工具语音输入</td>
+        <td>提示配置 DASHSCOPE_API_KEY</td>
+      </tr>
+      <tr>
+        <td><span class="tag tag-cyan">感知</span></td>
+        <td>DocParse 多遍解析</td>
+        <td>本地引擎</td>
+        <td>PDF/Word/TXT/MD 结构化提取</td>
+        <td>文档上传会议纪要</td>
+        <td>纯文本直读</td>
+      </tr>
+      <tr>
+        <td><span class="tag tag-blue">认知</span></td>
+        <td><code class="code">deepseek-chat</code></td>
+        <td>DeepSeek</td>
+        <td>需求拆分、会议解析、Copilot、站会/风险报告</td>
+        <td>默认全场景</td>
+        <td>规则模板引擎 <code class="code">engine.js</code></td>
+      </tr>
+      <tr>
+        <td><span class="tag tag-blue">认知</span></td>
+        <td><code class="code">deepseek-reasoner</code></td>
+        <td>DeepSeek</td>
+        <td>多步链式推理、复杂规划、深度分析</td>
+        <td>Agent 深度模式 <code class="code">options.deep</code></td>
+        <td>回退 deepseek-chat</td>
+      </tr>
+      <tr>
+        <td><span class="tag tag-blue">认知</span></td>
+        <td><code class="code">qwen-max</code></td>
+        <td>通义千问</td>
+        <td>国产备选 LLM，OpenAI 兼容协议</td>
+        <td>无 DEEPSEEK_KEY 时自动路由</td>
+        <td>规则引擎</td>
+      </tr>
+      <tr>
+        <td><span class="tag tag-purple">决策</span></td>
+        <td>RAG Context Builder</td>
+        <td>本地 <code class="code">agent.js</code></td>
+        <td>实时项目/团队/阻塞/活动注入</td>
+        <td>每次 Agent 对话</td>
+        <td>精简本地摘要</td>
+      </tr>
+      <tr>
+        <td><span class="tag tag-purple">决策</span></td>
+        <td>Intent Router</td>
+        <td>本地规则 + LLM</td>
+        <td>split / assign / risk / standup / mywork / team / acceptance</td>
+        <td>用户自然语言提问</td>
+        <td>general 通用回复</td>
+      </tr>
+      <tr>
+        <td><span class="tag tag-purple">决策</span></td>
+        <td>Assign Scorer</td>
+        <td>本地算法 + LLM</td>
+        <td>技能×负载×可用性 三维评分</td>
+        <td>智能分配、二次分配推荐</td>
+        <td>纯算法排序</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="multimodal">
+  <h2>4. 多模态管线</h2>
+  <h3>4.1 会议/语音 → 结构化需求</h3>
+  <div class="pipeline">
+    <span class="pipe-step">🎙️ 录音/上传</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step">ASR 转写</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step">热词校正</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step">会议记录存储</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step hl">LLM 拆解</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step hl">填入需求表单</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step">自动派单</span>
+  </div>
+
+  <div class="grid-2">
+    <div class="card card--glow">
+      <h4>语音通路 <code class="code">meeting.js → asr.js</code></h4>
+      <ul>
+        <li>支持 webm / mp3 / wav / m4a 等格式</li>
+        <li>主引擎 <code class="code">paraformer-v2</code>，失败自动切换 <code class="code">sensevoice-v1</code></li>
+        <li>敏捷热词表：Story、Epic、Kanban、WIP、站会、阻塞…</li>
+        <li>转写结果存为 <code class="code">meeting_record</code> 文档</li>
+      </ul>
+    </div>
+    <div class="card card--glow">
+      <h4>文档通路 <code class="code">meeting.js → docparse.js</code></h4>
+      <ul>
+        <li>支持 txt / md / csv / pdf / docx</li>
+        <li>多遍解析提取章节与元数据</li>
+        <li>统一输出 Markdown 会议记录格式</li>
+        <li>与语音记录共用「AI 拆解并填入表单」入口</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>4.2 LLM 会议解析输出 Schema</h3>
+  <div class="arch">{
+  "title": "需求标题",
+  "scene": "业务场景描述",
+  "pain_points": ["痛点1", "痛点2"],
+  "acceptance_criteria": "Given/When/Then 验收标准",
+  "priority": "high|medium|low",
+  "estimated_sp": 5,
+  "suggested_stories": [
+    { "title": "用户故事", "sp": 3, "criteria": "..." }
+  ]
+}</div>
+</section>
+
+<section id="agent">
+  <h2>5. Agent 框架（RAG + Intent + Memory）</h2>
+  <div class="card card--purple">
+    <p>FDE Agent 不是简单 ChatBot，而是<strong>绑定实时项目状态的敏捷教练</strong>。每次对话自动构建 RAG 上下文包，经 Intent 路由后注入场景化 System Prompt，保留最近 12 轮对话记忆。</p>
+  </div>
+
+  <h3>5.1 RAG 上下文包结构</h3>
+  <div class="arch">buildRagContext(user) → {
+  current_user:   { name, role, capabilities },
+  flow:           { in_progress, blocked, archived, terminated },
+  metrics:        { throughput, avgLeadTime, blocked },
+  my_tasks:       [ 最多15项个人任务 ],
+  blocked_items:  [ 阻塞详情 ],
+  pending_review: [ 待验收 ],
+  pending_assign: [ 待分配 ],
+  team:           [ 每人 workload / skills / availability ],
+  recent_changes: [ 最近10条活动日志 ]
+}</div>
+
+  <h3>5.2 Intent 意图路由</h3>
+  <table>
+    <thead><tr><th>Intent</th><th>触发词示例</th><th>Agent 行为</th></tr></thead>
+    <tbody>
+      <tr><td><code class="code">split</code></td><td>拆分、Epic、Story、需求</td><td>基于 INVEST 原则给出 Epic→Story→Task 建议</td></tr>
+      <tr><td><code class="code">assign</code></td><td>分配、指派、谁来做</td><td>结合团队负载与技能推荐主执行+协助人</td></tr>
+      <tr><td><code class="code">risk</code></td><td>风险、阻塞、延期</td><td>分析阻塞项，给出 24h 可执行行动</td></tr>
+      <tr><td><code class="code">standup</code></td><td>站会、今日、昨日进展</td><td>生成站会三段式摘要</td></tr>
+      <tr><td><code class="code">mywork</code></td><td>我的任务、待办</td><td>按优先级排列个人 Focus List</td></tr>
+      <tr><td><code class="code">team</code></td><td>团队、负载、谁最忙</td><td>负载均衡分析与调配建议</td></tr>
+      <tr><td><code class="code">acceptance</code></td><td>验收、归档</td><td>待验收任务优先级排序</td></tr>
+      <tr><td><code class="code">general</code></td><td>其他</td><td>综合项目数据给出敏捷管理建议</td></tr>
+    </tbody>
+  </table>
+
+  <h3>5.3 深度推理模式</h3>
+  <p>当用户启用深度分析（<code class="code">options.deep = true</code>）且配置了 DeepSeek Key 时，自动切换至 <code class="code">deepseek-reasoner</code> 模型，适用于复杂规划、多任务依赖分析、Retro 回顾等场景。</p>
+</section>
+
+<section id="engines">
+  <h2>6. 双引擎降级策略</h2>
+  <div class="verdict">
+    <strong>核心理念：</strong>LLM 是增强器，不是单点依赖。所有 AI 功能均有本地规则引擎兜底，平台在无 API Key 时仍可完成需求拆分、分配推荐、站会摘要等基础能力。
+  </div>
+
+  <table>
+    <thead><tr><th>功能</th><th>主引擎 (LLM)</th><th>备引擎 (Local)</th><th>标识</th></tr></thead>
+    <tbody>
+      <tr><td>需求拆分</td><td><code class="code">smartSplitRequirement()</code></td><td><code class="code">splitRequirement()</code> 模板匹配</td><td><span class="tag tag-green">[LLM 智能引擎]</span></td></tr>
+      <tr><td>智能分配</td><td><code class="code">llm.suggestAssignee()</code></td><td><code class="code">scoreExecutor()</code> 算法</td><td>推荐理由字段</td></tr>
+      <tr><td>Agent 对话</td><td><code class="code">agentChat()</code></td><td><code class="code">generateLocalAnswer()</code></td><td><code class="code">engine: llm|local</code></td></tr>
+      <tr><td>站会摘要</td><td><code class="code">generateStandupSummary()</code></td><td>活动日志拼接</td><td>响应 <code class="code">engine</code> 字段</td></tr>
+      <tr><td>风险扫描</td><td><code class="code">analyzeRisks()</code></td><td>阻塞项统计</td><td>—</td></tr>
+      <tr><td>会议解析</td><td><code class="code">parseMeetingToRequirement()</code></td><td>首行标题 + 全文截取</td><td>—</td></tr>
+    </tbody>
+  </table>
+
+  <h3>供应商路由优先级</h3>
+  <div class="pipeline">
+    <span class="pipe-step hl">1. DeepSeek</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step">2. 通义千问 Qwen</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step">3. OpenAI 兼容</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step">4. 本地规则引擎</span>
+  </div>
+</section>
+
+<section id="capabilities">
+  <h2>7. 能力地图</h2>
+  <div class="grid-3">
+    <div class="card">
+      <h4>📤 需求提交</h4>
+      <ul>
+        <li>快速表单提交</li>
+        <li>会议语音转写</li>
+        <li>文档智能解析</li>
+        <li>AI 一键拆解填表</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>🧠 需求与 AI 中心</h4>
+      <ul>
+        <li>Epic/Story/Task 拆分</li>
+        <li>智能分配推荐</li>
+        <li>AI Copilot 对话</li>
+        <li>语音/文档 AI 工具</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>📊 管理洞察</h4>
+      <ul>
+        <li>站会摘要生成</li>
+        <li>风险扫描报告</li>
+        <li>项目 Retro 回顾</li>
+        <li>AI 洞察卡片</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>与业务流程映射</h3>
+  <div class="pipeline">
+    <span class="pipe-step">需求输入</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step hl">AI 拆分</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step hl">智能分配</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step">执行中</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step">每日进展</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step">阻塞处理</span><span class="pipe-arrow">→</span>
+    <span class="pipe-step">已归档</span>
+  </div>
+</section>
+
+<section id="modules">
+  <h2>8. 代码模块映射</h2>
+  <table>
+    <thead><tr><th>文件</th><th>职责</th><th>关键导出</th></tr></thead>
+    <tbody>
+      <tr><td><code class="code">server/ai/llm.js</code></td><td>LLM 统一网关、供应商路由、JSON 对话</td><td><code class="code">chat, smartSplitRequirement, parseMeetingToRequirement</code></td></tr>
+      <tr><td><code class="code">server/ai/agent.js</code></td><td>RAG 构建、Intent 检测、多轮 Agent</td><td><code class="code">agentChat, buildRagContext, detectIntent</code></td></tr>
+      <tr><td><code class="code">server/ai/engine.js</code></td><td>业务 AI 编排（拆分/站会/风险/Retro）</td><td><code class="code">splitRequirementSmart, generateStandupSummary, analyzeRisks</code></td></tr>
+      <tr><td><code class="code">server/ai/assign.js</code></td><td>三维评分智能分配</td><td><code class="code">intelligentAssign, scoreExecutor</code></td></tr>
+      <tr><td><code class="code">server/ai/asr.js</code></td><td>DashScope 多引擎语音转写</td><td><code class="code">transcribeFile, postProcessTranscript</code></td></tr>
+      <tr><td><code class="code">server/ai/meeting.js</code></td><td>会议记录 CRUD + 拆解入口</td><td><code class="code">transcribeAndSave, parseToRequirement</code></td></tr>
+      <tr><td><code class="code">server/ai/docparse.js</code></td><td>多格式文档解析</td><td><code class="code">parseDocument, chunkSections</code></td></tr>
+      <tr><td><code class="code">server/ai/voice.js</code></td><td>语音文件处理与任务自动创建</td><td><code class="code">processVoiceFile</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>API 端点（AI 相关）</h3>
+  <table>
+    <thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>GET</td><td><code class="code">/api/ai/status</code></td><td>LLM/ASR/Agent 就绪状态</td></tr>
+      <tr><td>POST</td><td><code class="code">/api/ai/split-requirement</code></td><td>智能需求拆分</td></tr>
+      <tr><td>POST</td><td><code class="code">/api/ai/chat</code></td><td>Agent 多轮对话</td></tr>
+      <tr><td>POST</td><td><code class="code">/api/ai/standup</code></td><td>站会摘要</td></tr>
+      <tr><td>POST</td><td><code class="code">/api/ai/risks</code></td><td>风险扫描</td></tr>
+      <tr><td>POST</td><td><code class="code">/api/ai/voice/process</code></td><td>语音转写 + 可选建任务</td></tr>
+      <tr><td>POST</td><td><code class="code">/api/ai/document/process</code></td><td>文档解析</td></tr>
+      <tr><td>POST</td><td><code class="code">/api/ai/meeting/:id/parse</code></td><td>会议记录 → 结构化需求</td></tr>
+      <tr><td>POST</td><td><code class="code">/api/items/:id/smart-assign</code></td><td>智能分配</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="config">
+  <h2>9. 环境配置</h2>
+  <div class="arch"># ═══ 推荐配置（国产双引擎）═══
+
+# DeepSeek — 认知层主模型
+DEEPSEEK_API_KEY=sk-xxx
+DEEPSEEK_MODEL=deepseek-chat          # 默认对话/拆分
+DEEPSEEK_REASONER_MODEL=deepseek-reasoner  # 深度推理
+
+# 阿里云 DashScope — 感知层 + LLM 备选
+DASHSCOPE_API_KEY=sk-xxx
+ASR_MODEL=paraformer-v2               # 语音主引擎
+DASHSCOPE_MODEL=qwen-max              # LLM 备选（无 DeepSeek 时）
+
+# 可选 OpenAI 兼容
+OPENAI_API_KEY=sk-xxx
+OPENAI_MODEL=gpt-4o-mini</div>
+
+  <table>
+    <thead><tr><th>变量</th><th>必需</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td><code class="code">DEEPSEEK_API_KEY</code></td><td>推荐</td><td>启用 LLM 智能拆分、Agent、站会/风险</td></tr>
+      <tr><td><code class="code">DASHSCOPE_API_KEY</code></td><td>推荐</td><td>启用语音转写；同时作为 Qwen LLM 备选</td></tr>
+      <tr><td><code class="code">DEEPSEEK_REASONER_MODEL</code></td><td>可选</td><td>Agent 深度推理模式</td></tr>
+      <tr><td><code class="code">ASR_MODEL</code></td><td>可选</td><td>指定 ASR 主引擎，默认 paraformer-v2</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="compare">
+  <h2>10. 业界方案对比</h2>
+  <div class="compare-row">
+    <div class="compare-col">
+      <h4>传统项目管理工具</h4>
+      <ul>
+        <li>Jira / 禅道：无原生 LLM</li>
+        <li>依赖人工拆分与分配</li>
+        <li>语音/会议需第三方</li>
+        <li>AI 能力需插件拼接</li>
+      </ul>
+    </div>
+    <div class="compare-col">
+      <h4>通用 AI 助手</h4>
+      <ul>
+        <li>ChatGPT / Copilot：无项目上下文</li>
+        <li>不绑定看板四态流转</li>
+        <li>输出非结构化，难落地</li>
+        <li>无国产模型合规路径</li>
+      </ul>
+    </div>
+    <div class="compare-col winner">
+      <h4>✅ FDE AIMF 框架</h4>
+      <ul>
+        <li>RAG 注入实时项目数据</li>
+        <li>多模态 → 结构化 → 自动派单</li>
+        <li>DeepSeek + DashScope 国产双引擎</li>
+        <li>LLM + 规则双引擎永不宕机</li>
+        <li>Intent Agent 场景化精准回复</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="roadmap">
+  <h2>11. 演进路线</h2>
+  <table>
+    <thead><tr><th>阶段</th><th>能力</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>v1.0</td><td>规则引擎拆分 + 基础看板</td><td><span class="tag tag-gray">已完成</span></td></tr>
+      <tr><td>v1.5</td><td>DeepSeek LLM 接入 + 语音转写</td><td><span class="tag tag-gray">已完成</span></td></tr>
+      <tr><td>v2.0</td><td>任务中心合并 + RAG Agent + 会议拆解管线</td><td><span class="tag tag-green">已上线</span></td></tr>
+      <tr><td>v2.5</td><td>向量检索 RAG · 多 Agent 协作 · 流式输出</td><td><span class="tag tag-yellow">规划中</span></td></tr>
+      <tr><td>v3.0</td><td>预测性风险 · 自动站会调度 · 知识库沉淀</td><td><span class="tag tag-blue">远期</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="card card--glow" style="margin-top:1rem">
+    <h4>🔮 v2.5 关键技术预研</h4>
+    <ul>
+      <li><strong>Embedding RAG</strong>：任务描述 / 进展记录向量化，支持语义检索历史相似需求</li>
+      <li><strong>Multi-Agent</strong>：拆分 Agent + 分配 Agent + 风险 Agent 分工协作</li>
+      <li><strong>SSE 流式</strong>：AI 对话与拆分结果实时打字输出，降低等待焦虑</li>
+      <li><strong>Tool Calling</strong>：Agent 直接调用 <code class="code">createItem / assign / terminate</code> 等 API</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+</div>
+
+<footer class="footer">
+  FDE管理平台 · 先进智能模型框架 (AIMF) · v2.0 · 2026-07-12<br>
+  基于当前代码库 <code class="code">server/ai/*</code> 实现 · 与平台同步演进
+</footer>
+
+</body>
+</html>
