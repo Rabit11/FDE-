@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FDE管理平台 · 全局看板可视化方案</title>
+<style>
+:root {
+  --bg: #eef2f8;
+  --surface: #fff;
+  --border: #d8e3f0;
+  --text: #153e75;
+  --muted: #5a7291;
+  --accent: #2563eb;
+  --run: #f5d061;
+  --block: #ef4444;
+  --done: #22c55e;
+  --term: #94a3b8;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.65; font-size: 14px;
+}
+.hero {
+  background: linear-gradient(135deg, #0c1929, #1e3a5f 45%, #2563eb);
+  padding: 2.2rem 2rem; color: #fff;
+}
+.hero h1 { font-size: 1.85rem; margin-bottom: 0.35rem; }
+.hero p { opacity: 0.94; max-width: 680px; font-size: 0.92rem; }
+.hero .meta { opacity: 0.9; font-size: 0.82rem; margin-top: 0.65rem; }
+.hero .meta span { margin-right: 1.25rem; }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+
+.section { margin-bottom: 2rem; }
+.section h2 {
+  font-size: 1.2rem; margin-bottom: 0.65rem; padding-bottom: 0.4rem;
+  border-bottom: 2px solid var(--border); color: #0f2e5b;
+}
+.section h3 { font-size: 0.95rem; color: var(--accent); margin: 0.85rem 0 0.5rem; }
+.note {
+  background: linear-gradient(135deg, #eff6ff, #f0fdf4);
+  border: 1px solid #bfdbfe; border-radius: 10px;
+  padding: 0.85rem 1rem; margin-bottom: 1rem; font-size: 0.88rem;
+}
+.tag {
+  display: inline-block; padding: 0.1rem 0.45rem; border-radius: 999px;
+  font-size: 0.68rem; font-weight: 700; margin-right: 0.25rem;
+}
+.tag-run { background: #fff8e1; color: #6b5410; }
+.tag-block { background: #fee2e2; color: #b91c1c; }
+.tag-done { background: #dcfce7; color: #15803d; }
+.tag-term { background: #f1f5f9; color: #64748b; }
+
+/* ── 主可视化 Mock ── */
+.viz-board {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 1rem;
+  align-items: stretch;
+}
+@media (max-width: 900px) { .viz-board { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 1rem 1.1rem;
+  box-shadow: 0 4px 16px rgba(15,46,91,0.05);
+}
+.panel-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 0.75rem;
+}
+.panel-title { font-weight: 800; font-size: 0.9rem; }
+.panel-sub { font-size: 0.72rem; color: var(--muted); }
+
+/* 饼图 */
+.pie-wrap { display: flex; flex-direction: column; align-items: center; gap: 0.85rem; }
+.pie-chart {
+  width: 200px; height: 200px; border-radius: 50%; position: relative;
+  background: conic-gradient(
+    var(--run) 0deg 306.67deg,
+    var(--block) 306.67deg 320deg,
+    var(--done) 320deg 360deg
+  );
+  box-shadow: 0 8px 24px rgba(15,46,91,0.1);
+}
+.pie-chart::after {
+  content: ""; position: absolute; inset: 28%; border-radius: 50%;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--border);
+}
+.pie-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; z-index: 1; pointer-events: none;
+}
+.pie-center strong { font-size: 1.75rem; font-weight: 850; color: var(--run); line-height: 1; }
+.pie-center span { font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem; }
+
+.pie-legend { width: 100%; }
+.pie-legend-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.35rem 0; font-size: 0.78rem; border-bottom: 1px dashed #e8eef5;
+  cursor: pointer; transition: background 0.15s;
+  border-radius: 6px; padding-left: 0.35rem; padding-right: 0.35rem;
+}
+.pie-legend-row:hover, .pie-legend-row.active { background: #f0f7ff; }
+.pie-legend-row:last-child { border-bottom: none; }
+.pie-dot { width: 10px; height: 10px; border-radius: 3px; margin-right: 0.45rem; flex-shrink: 0; }
+.pie-legend-left { display: flex; align-items: center; }
+.pie-legend-val { font-weight: 800; }
+.pie-legend-pct { color: var(--muted); font-size: 0.72rem; margin-left: 0.35rem; }
+
+/* 执行中详情区 */
+.exec-summary {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.55rem; margin-bottom: 0.85rem;
+}
+@media (max-width: 700px) { .exec-summary { grid-template-columns: repeat(2, 1fr); } }
+.exec-chip {
+  text-align: center; padding: 0.55rem 0.4rem; border-radius: 10px;
+  border: 1px solid var(--border); background: #fafcff;
+}
+.exec-chip strong { display: block; font-size: 1.35rem; font-weight: 850; line-height: 1.1; }
+.exec-chip span { font-size: 0.68rem; color: var(--muted); }
+.exec-chip--ok strong { color: #16a34a; }
+.exec-chip--warn strong { color: #d97706; }
+.exec-chip--hot strong { color: var(--accent); }
+.exec-chip--run strong { color: var(--run); }
+
+/* 今日更新率环 */
+.rate-row { display: flex; gap: 1rem; align-items: center; margin-bottom: 0.85rem; flex-wrap: wrap; }
+.rate-ring {
+  width: 88px; height: 88px; border-radius: 50%; flex-shrink: 0;
+  background: conic-gradient(#22c55e 0deg 219deg, #e2e8f0 219deg 360deg);
+  display: flex; align-items: center; justify-content: center; position: relative;
+}
+.rate-ring::after {
+  content: ""; position: absolute; inset: 18%; border-radius: 50%; background: #fff;
+}
+.rate-ring-inner { position: relative; z-index: 1; text-align: center; }
+.rate-ring-inner strong { display: block; font-size: 1.1rem; color: #15803d; }
+.rate-ring-inner span { font-size: 0.62rem; color: var(--muted); }
+.rate-desc { flex: 1; min-width: 180px; font-size: 0.8rem; color: #334155; }
+.rate-desc p { margin-bottom: 0.25rem; }
+
+/* 人员活跃热力 */
+.person-heat { margin-bottom: 0.85rem; }
+.person-heat-row {
+  display: grid; grid-template-columns: 4rem 1fr 5.5rem 3rem;
+  gap: 0.45rem; align-items: center; padding: 0.35rem 0;
+  border-bottom: 1px solid #eef2f7; font-size: 0.76rem;
+}
+.person-heat-row:last-child { border-bottom: none; }
+.ph-name { font-weight: 700; }
+.ph-bar-wrap { height: 10px; background: #e8eef5; border-radius: 5px; overflow: hidden; }
+.ph-bar { height: 100%; border-radius: 5px; }
+.ph-bar--hot { background: linear-gradient(90deg, #f5d061, #ef4444); }
+.ph-bar--warm { background: linear-gradient(90deg, #3b82f6, #06b6d4); }
+.ph-bar--cool { background: #94a3b8; }
+.ph-meta { font-size: 0.68rem; color: var(--muted); }
+.ph-today { text-align: right; font-weight: 700; }
+.ph-today.ok { color: #16a34a; }
+.ph-today.no { color: #d97706; }
+
+/* 任务活跃列表 */
+.task-viz-list { display: flex; flex-direction: column; gap: 0.4rem; max-height: 220px; overflow-y: auto; }
+.task-viz-item {
+  display: grid; grid-template-columns: 1fr auto auto;
+  gap: 0.5rem; align-items: center; padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border); border-radius: 8px; background: #fff;
+  font-size: 0.74rem;
+}
+.task-viz-item:hover { border-color: #93c5fd; background: #f8fbff; }
+.tv-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tv-sub { font-size: 0.66rem; color: var(--muted); margin-top: 0.1rem; }
+.tv-pulse {
+  display: flex; gap: 2px; align-items: flex-end; height: 22px;
+}
+.tv-pulse span {
+  width: 4px; border-radius: 2px 2px 0 0; background: #cbd5e1;
+}
+.tv-pulse span.on { background: #3b82f6; }
+.tv-pulse span.today { background: #22c55e; }
+.tv-badge {
+  padding: 0.12rem 0.4rem; border-radius: 999px; font-size: 0.62rem; font-weight: 700; white-space: nowrap;
+}
+.tv-badge--ok { background: #dcfce7; color: #15803d; }
+.tv-badge--no { background: #fff8e1; color: #6b5410; }
+.tv-badge--stale { background: #f1f5f9; color: #64748b; }
+
+/* 布局示意 */
+.layout-mock {
+  background: #0f172a; color: #94a3b8; padding: 1rem; border-radius: 10px;
+  font-family: Consolas, monospace; font-size: 0.74rem; line-height: 1.55; overflow-x: auto;
+}
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
+@media (max-width: 800px) { .compare { grid-template-columns: 1fr; } }
+.compare-card { padding: 0.85rem 1rem; border-radius: 10px; border: 1px solid var(--border); background: #fff; }
+.compare-card h4 { font-size: 0.85rem; margin-bottom: 0.45rem; }
+.compare-old { color: #94a3b8; text-decoration: line-through; }
+.compare-new { color: #15803d; font-weight: 600; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin: 0.65rem 0; }
+th, td { padding: 0.5rem 0.65rem; border: 1px solid var(--border); text-align: left; }
+th { background: #eaf2ff; }
+
+.footer {
+  text-align: center; padding: 1.25rem; color: var(--muted); font-size: 0.78rem;
+  border-top: 1px solid var(--border); margin-top: 1rem;
+}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>📊 全局看板 · 可视化增强方案</h1>
+  <p>四态分布饼图 + 执行中任务活跃洞察 — 一屏看懂「项目在哪、谁在动、今天谁没报」</p>
+  <div class="meta">
+    <span>📄 /FDE全局看板可视化方案.html</span>
+    <span>📅 2026-07-12</span>
+    <span>🎯 可视化 v4.1</span>
+    <span>✅ 已落地实现</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+<div class="note">
+  <strong>设计思路：</strong>四态指标卡保留数字冲击力，左侧增加<strong>环形饼图</strong>呈现整体分布；右侧专设<strong>「执行中洞察」</strong>面板，用今日更新率、人员热力、任务脉搏图回答「活跃吗、今天动了吗」。不替代现有行动队列与趋势图，而是与之并列，形成「分布 → 执行细节 → 行动」的阅读路径。
+</div>
+
+<section class="section">
+  <h2>1. 可视化预览（推荐布局）</h2>
+  <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.85rem">样例数据：执行中 23 · 阻塞 1 · 已归档 3 · 已终止 0（与当前平台一致）</p>
+
+  <div class="viz-board">
+    <!-- 左：饼图 -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">四态分布</span>
+        <span class="panel-sub">共 27 项</span>
+      </div>
+      <div class="pie-wrap">
+        <div class="pie-chart" id="pieChart">
+          <div class="pie-center">
+            <strong>23</strong>
+            <span>执行中占比 85%</span>
+          </div>
+        </div>
+        <div class="pie-legend" id="pieLegend">
+          <div class="pie-legend-row active" data-slice="run" onclick="highlightSlice('run')">
+            <span class="pie-legend-left"><i class="pie-dot" style="background:var(--run)"></i>执行中</span>
+            <span><span class="pie-legend-val">23</span><span class="pie-legend-pct">85%</span></span>
+          </div>
+          <div class="pie-legend-row" data-slice="block" onclick="highlightSlice('block')">
+            <span class="pie-legend-left"><i class="pie-dot" style="background:var(--block)"></i>阻塞</span>
+            <span><span class="pie-legend-val">1</span><span class="pie-legend-pct">4%</span></span>
+          </div>
+          <div class="pie-legend-row" data-slice="done" onclick="highlightSlice('done')">
+            <span class="pie-legend-left"><i class="pie-dot" style="background:var(--done)"></i>已归档</span>
+            <span><span class="pie-legend-val">3</span><span class="pie-legend-pct">11%</span></span>
+          </div>
+          <div class="pie-legend-row" data-slice="term" onclick="highlightSlice('term')">
+            <span class="pie-legend-left"><i class="pie-dot" style="background:var(--term)"></i>已终止</span>
+            <span><span class="pie-legend-val">0</span><span class="pie-legend-pct">0%</span></span>
+          </div>
+        </div>
+      </div>
+      <p style="font-size:0.72rem;color:var(--muted);margin-top:0.65rem;text-align:center">点击图例 → 跳转任务中心对应筛选</p>
+    </div>
+
+    <!-- 右：执行中洞察 -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">⚡ 执行中任务洞察</span>
+        <span class="panel-sub">23 项进行中</span>
+      </div>
+
+      <div class="exec-summary">
+        <div class="exec-chip exec-chip--run"><strong>23</strong><span>执行中总数</span></div>
+        <div class="exec-chip exec-chip--ok"><strong>14</strong><span>今日已报进展</span></div>
+        <div class="exec-chip exec-chip--warn"><strong>9</strong><span>今日未报进展</span></div>
+        <div class="exec-chip exec-chip--hot"><strong>7</strong><span>7日内活跃人数</span></div>
+      </div>
+
+      <div class="rate-row">
+        <div class="rate-ring" title="今日进展提交率">
+          <div class="rate-ring-inner"><strong>61%</strong><span>今日更新率</span></div>
+        </div>
+        <div class="rate-desc">
+          <p><strong>今日更新率</strong> = 今日已提交进展的主执行任务 ÷ 执行中任务</p>
+          <p>绿色环：已报 <strong>14</strong> · 灰色：未报 <strong>9</strong></p>
+          <p>低于 70% 时环变橙，低于 50% 变红（RAG 提示）</p>
+        </div>
+      </div>
+
+      <h3>人员活跃（7 日进展 + 今日状态）</h3>
+      <div class="person-heat">
+        <div class="person-heat-row">
+          <span class="ph-name">赵立泽</span>
+          <div class="ph-bar-wrap"><div class="ph-bar ph-bar--hot" style="width:92%"></div></div>
+          <span class="ph-meta">7日 12 次进展 · 主6</span>
+          <span class="ph-today no">未报</span>
+        </div>
+        <div class="person-heat-row">
+          <span class="ph-name">王诗瑶</span>
+          <div class="ph-bar-wrap"><div class="ph-bar ph-bar--warm" style="width:68%"></div></div>
+          <span class="ph-meta">7日 8 次 · 主4</span>
+          <span class="ph-today ok">已报</span>
+        </div>
+        <div class="person-heat-row">
+          <span class="ph-name">杨会冉</span>
+          <div class="ph-bar-wrap"><div class="ph-bar ph-bar--warm" style="width:55%"></div></div>
+          <span class="ph-meta">7日 6 次 · 主3</span>
+          <span class="ph-today ok">已报</span>
+        </div>
+        <div class="person-heat-row">
+          <span class="ph-name">万贤书</span>
+          <div class="ph-bar-wrap"><div class="ph-bar ph-bar--cool" style="width:30%"></div></div>
+          <span class="ph-meta">7日 2 次 · 主2</span>
+          <span class="ph-today no">未报</span>
+        </div>
+      </div>
+
+      <h3>任务脉搏（近 7 日有无进展 + 今日）</h3>
+      <div class="task-viz-list">
+        <div class="task-viz-item">
+          <div>
+            <div class="tv-title">REQ-0012 · 林宇飞让我搭建AI协同赋能的平台</div>
+            <div class="tv-sub">赵立泽 · P1 · 最近：昨日</div>
+          </div>
+          <div class="tv-pulse" title="过去7天每日是否有进展">
+            <span></span><span class="on"></span><span class="on"></span><span></span><span class="on"></span><span></span><span></span>
+          </div>
+          <span class="tv-badge tv-badge--no">今日未报</span>
+        </div>
+        <div class="task-viz-item">
+          <div>
+            <div class="tv-title">REQ-0003 · 科研数据可视化看板</div>
+            <div class="tv-sub">王诗瑶 · P2 · 最近：今日 14:20</div>
+          </div>
+          <div class="tv-pulse">
+            <span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="today"></span><span class="today"></span>
+          </div>
+          <span class="tv-badge tv-badge--ok">今日已报</span>
+        </div>
+        <div class="task-viz-item">
+          <div>
+            <div class="tv-title">REQ-0015 · 智能审核规则引擎</div>
+            <div class="tv-sub">杨会冉 · P3 · 最近：今日 09:10</div>
+          </div>
+          <div class="tv-pulse">
+            <span></span><span class="on"></span><span></span><span class="on"></span><span></span><span class="on"></span><span class="today"></span>
+          </div>
+          <span class="tv-badge tv-badge--ok">今日已报</span>
+        </div>
+        <div class="task-viz-item">
+          <div>
+            <div class="tv-title">REQ-0009 · 移动端离线缓存</div>
+            <div class="tv-sub">万贤书 · P3 · 最近：3天前</div>
+          </div>
+          <div class="tv-pulse">
+            <span></span><span></span><span class="on"></span><span></span><span></span><span></span><span></span>
+          </div>
+          <span class="tv-badge tv-badge--stale">3日未动</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <h2>2. 推荐嵌入位置（全局看板 v4.1）</h2>
+  <div class="layout-mock">┌─ 流动健康 + 精简 KPI 条（4 项）────────────────────────────────────┐
+├─ 四态饼图 │ 执行中洞察（今日率 + 人员活跃 + 任务脉搏）──────────────┤  ← 本方案
+├─ 需立即处理 │ 近7日流动趋势 ────────────────────────────────────────┤
+├─ 四态快照/甘特 Tab（全宽，人员负载已并入执行洞察）──────────────────┤
+└─ AI 洞察 + 实时动态 ────────────────────────────────────────────────┘</div>
+  <p style="font-size:0.84rem;margin-top:0.5rem;color:var(--muted)">v4.5 已移除四态大指标卡（与饼图重复）；执行中色统一为梵高星空黄 <code>#f5d061</code>。</p>
+</section>
+
+<section class="section">
+  <h2>3. 图表说明</h2>
+  <table>
+    <tr><th>可视化</th><th>数据来源</th><th>交互</th></tr>
+    <tr>
+      <td><span class="tag tag-run">环形饼图</span></td>
+      <td><code>flowCategory()</code> 四态计数</td>
+      <td>点击扇区/图例 → <code>goTaskCenter(flow)</code></td>
+    </tr>
+    <tr>
+      <td><span class="tag tag-run">今日更新率环</span></td>
+      <td>执行中任务 ∩ 今日 <code>progress_updates</code></td>
+      <td>悬停显示已报/未报名单</td>
+    </tr>
+    <tr>
+      <td>人员活跃热力条</td>
+      <td>7 日进展次数 + 主执行负载</td>
+      <td>点击 → 按人筛选任务中心</td>
+    </tr>
+    <tr>
+      <td>任务脉搏（7 柱）</td>
+      <td>每项任务过去 7 天每日是否有进展</td>
+      <td>最后一柱绿色=今日；点击行 → 任务详情</td>
+    </tr>
+  </table>
+
+  <h3>任务脉搏图例</h3>
+  <p style="font-size:0.84rem">每根小柱代表一天（左→右 = 6天前→今天）。蓝色=当日有进展，绿色=今天且已报，灰色=无进展。比纯文字「今日未报 9」更直观看到<strong>哪几个任务连续多天没动</strong>。</p>
+</section>
+
+<section class="section">
+  <h2>4. 与现有模块关系</h2>
+  <div class="compare">
+    <div class="compare-card">
+      <h4>保留</h4>
+      <ul style="font-size:0.84rem;padding-left:1.1rem">
+        <li>流动健康度评分</li>
+        <li>精简 KPI 条（吞吐量 / Lead Time / P1 / 超期）</li>
+        <li>行动队列、7 日趋势</li>
+        <li>四态快照/甘特（全宽）</li>
+      </ul>
+    </div>
+    <div class="compare-card">
+      <h4>本方案新增</h4>
+      <ul style="font-size:0.84rem;padding-left:1.1rem">
+        <li class="compare-new">四态环形饼图（分布一眼看清）</li>
+        <li class="compare-new">执行中专属洞察面板</li>
+        <li class="compare-new">今日更新率环（RAG）</li>
+        <li class="compare-new">任务脉搏 7 日热力</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <h2>5. 落地建议</h2>
+  <table>
+    <tr><th>步骤</th><th>改动</th><th>复杂度</th></tr>
+    <tr><td>1</td><td>新增 <code>buildFlowDistribution()</code> + CSS 饼图 / SVG 环</td><td>低</td></tr>
+    <tr><td>2</td><td>新增 <code>buildExecutingInsight()</code>：今日率、人员热力、任务脉搏</td><td>中</td></tr>
+    <tr><td>3</td><td>插入 <code>renderGlobalKanbanBody()</code> 指标卡下方新一行</td><td>低</td></tr>
+    <tr><td>4</td><td>样式 <code>.gk-viz-*</code> 写入 style.css</td><td>低</td></tr>
+  </table>
+  <p style="font-size:0.84rem;margin-top:0.65rem">纯 CSS 饼图即可满足需求，无需引入 Chart.js；若后续要交互悬停扇区，可换 SVG + <code>stroke-dasharray</code>。</p>
+</section>
+
+</div>
+
+<footer class="footer">
+  FDE管理平台 · 全局看板可视化方案 · 2026-07-12<br>
+  <a href="/FDE全局看板驾驶舱优化方案.html">驾驶舱总方案</a> ·
+  <a href="/">进入平台</a>
+</footer>
+
+<script>
+const SLICES = {
+  run:  { pct: 85.19, color: '#f5d061', label: '23', sub: '执行中占比 85%' },
+  block:{ pct: 3.70,  color: '#ef4444', label: '1',  sub: '阻塞占比 4%' },
+  done: { pct: 11.11, color: '#22c55e', label: '3',  sub: '已归档占比 11%' },
+  term: { pct: 0,     color: '#94a3b8', label: '0',  sub: '已终止' },
+};
+function highlightSlice(key) {
+  document.querySelectorAll('.pie-legend-row').forEach(r => {
+    r.classList.toggle('active', r.dataset.slice === key);
+  });
+  const s = SLICES[key];
+  const pie = document.getElementById('pieChart');
+  const center = pie.querySelector('.pie-center');
+  if (key === 'run') {
+    pie.style.background = 'conic-gradient(#f5d061 0deg 306.67deg, #ef4444 306.67deg 320deg, #22c55e 320deg 360deg)';
+  } else {
+    const start = key === 'block' ? 306.67 : key === 'done' ? 320 : 0;
+    const end = key === 'block' ? 320 : key === 'done' ? 360 : 0;
+    pie.style.background = `conic-gradient(${s.color} 0deg 360deg)`;
+    pie.style.boxShadow = `0 0 0 4px ${s.color}33`;
+  }
+  center.innerHTML = `<strong>${s.label}</strong><span>${s.sub}</span>`;
+  center.querySelector('strong').style.color = s.color;
+}
+</script>
+</body>
+</html>

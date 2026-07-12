@@ -1,8 +1,10 @@
 const API = '/api';
 const BLOCKER_TYPES = { none: '无卡点', resource: '资源冲突', time: '时间冲突', technical: '技术问题', other: '其他' };
 const BLOCKER_ICONS = { resource: '🔧', time: '⏰', technical: '💻', other: '⚠️' };
+const STAR_GOLD = '#f5d061';
+const STAR_GOLD_DARK = '#8a6d12';
 const FLOW_COLS = [
-  { id: 'in_progress', label: '执行中', color: '#f59e0b' },
+  { id: 'in_progress', label: '执行中', color: '#f5d061' },
   { id: 'blocked', label: '阻塞', color: '#ef4444' },
   { id: 'done', label: '已归档', color: '#22c55e' },
   { id: 'terminated', label: '已终止', color: '#94a3b8' },
@@ -13,6 +15,11 @@ const STATUS_LABELS = {
   blocked: '阻塞', done: '已归档', terminated: '已终止',
 };
 const TYPE_LABELS = { epic: 'Epic', story: 'Story', task: 'Task', bug: 'Bug' };
+const PRIORITY_LEVELS = [
+  { value: 1, label: 'P1 紧急', short: 'P1' },
+  { value: 2, label: 'P2 高', short: 'P2' },
+  { value: 3, label: 'P3 普通', short: 'P3' },
+];
 const WIP_LIMITS = { in_progress: 10, blocked: 5, done: 99, terminated: 99 };
 
 function flowCategory(item) {
@@ -24,9 +31,10 @@ function flowCategory(item) {
   return 'in_progress';
 }
 
-let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], userReviewProjects: [], currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'list', demandAiTab: 'submit', submitTab: 'quick', profileShowAll: false, globalKanbanUpdatedAt: null };
+let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], userReviewProjects: [], currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'list', demandAiTab: 'submit', submitTab: 'quick', profileShowAll: false, globalKanbanUpdatedAt: null, workbenchFilter: 'all' };
 
 let globalKanbanTimer = null;
+const DASHBOARD_POLL_MS = 5000;
 
 function getToken() { return localStorage.getItem('agileai_token'); }
 
@@ -109,9 +117,87 @@ function projectStatusMeta(item = {}) {
   return { label: '执行中', cls: 'running' };
 }
 
+function normalizePriority(value) {
+  const p = Number(value);
+  return [1, 2, 3].includes(p) ? p : 3;
+}
+
+function priorityMeta(value) {
+  const p = normalizePriority(value);
+  const level = PRIORITY_LEVELS.find(l => l.value === p) || PRIORITY_LEVELS[2];
+  return { value: p, label: level.label, short: level.short, cls: `priority-${p}` };
+}
+
+function sortByPriority(items = []) {
+  return [...items].sort((a, b) =>
+    normalizePriority(a.priority) - normalizePriority(b.priority) ||
+    (b.updated_at || '').localeCompare(a.updated_at || '')
+  );
+}
+
+function canEditTaskPriority(item) {
+  if (!item || !state.user) return false;
+  if (isReviewerUser()) return true;
+  return item.assignee === state.user.name || (item.assistants || []).includes(state.user.name);
+}
+
+function priorityBadgeHtml(item, { compact = false } = {}) {
+  const meta = priorityMeta(item?.priority);
+  if (compact) {
+    return `<span class="priority-badge priority-badge--sm ${meta.cls}" title="${meta.label}"><span class="priority-dot ${meta.cls}"></span>${meta.short}</span>`;
+  }
+  return `<span class="priority-badge ${meta.cls}" title="${meta.label}"><span class="priority-dot ${meta.cls}"></span>${meta.label}</span>`;
+}
+
+function priorityControlHtml(item, { editable = false } = {}) {
+  const meta = priorityMeta(item?.priority);
+  if (!editable || !canEditTaskPriority(item)) return priorityBadgeHtml(item, { compact: true });
+  return `<select class="priority-select ${meta.cls}" onclick="event.stopPropagation()" onchange="updateTaskPriority('${item.id}', this.value)" title="调整任务优先级">
+    ${PRIORITY_LEVELS.map(l => `<option value="${l.value}" ${meta.value === l.value ? 'selected' : ''}>${l.label}</option>`).join('')}
+  </select>`;
+}
+
+function syncItemInState(item) {
+  if (!item?.id) return;
+  const patchList = (list = []) => list.map(i => i.id === item.id ? { ...i, ...item } : i);
+  state.items = patchList(state.items);
+  state.myWorkItems = patchList(state.myWorkItems);
+  state.userProjects = patchList(state.userProjects);
+}
+
+function prependActivityInState(activity) {
+  if (!activity?.id) return;
+  const rest = (state.activity || []).filter(a => a.id !== activity.id);
+  state.activity = [activity, ...rest].slice(0, 50);
+}
+
+function refreshActivityFeedDom() {
+  const topInsight = state.insights.find(i => i.severity === 'warning') || state.insights[0];
+  const feedPanel = document.getElementById('gk-feed-panel');
+  if (feedPanel) feedPanel.outerHTML = renderActivityFeedPanel(topInsight);
+  else {
+    const feed = document.getElementById('gk-feed');
+    if (feed) feed.innerHTML = renderActivityFeedHtml();
+  }
+}
+
+async function refreshCurrentView() {
+  const view = state.currentView;
+  const renderers = {
+    taskcenter: renderTaskCenter, dashboard: renderDashboard, demandai: renderDemandAI,
+    mywork: renderMyWork, submit: renderSubmit, profile: renderProfile, team: renderTeam,
+    kanban: renderTaskCenter, review: renderTaskCenter, acceptance: renderTaskCenter, ai: renderDemandAI,
+  };
+  const render = renderers[view];
+  if (!render) return;
+  document.getElementById('content').innerHTML = render();
+  if (view === 'dashboard' && isReviewerUser()) startGlobalKanbanPolling();
+  if (view === 'taskcenter' && state.kanbanViewMode === 'board') initDragDrop();
+}
+
 async function loadData() {
   const fetches = [
-    api('/items'), api('/metrics'), api('/activity?limit=30'), api('/ai/insights'), api('/users'),
+    api('/items'), api('/metrics'), api('/activity?limit=40'), api('/ai/insights'), api('/users'),
   ];
   const isExecutor = (state.user?.capabilities || []).includes('executor');
   if (isExecutor) fetches.push(api('/items/my-work').catch(() => []));
@@ -125,10 +211,11 @@ async function loadData() {
 function updateWorkflowBadge() {
   const el = document.getElementById('workflowBadge');
   if (!el) return;
-  const running = state.items.filter(i => flowCategory(i) === 'in_progress').length;
-  const blocked = state.items.filter(i => i.status === 'blocked').length;
-  const done = state.items.filter(i => flowCategory(i) === 'done').length;
-  const terminated = state.items.filter(i => flowCategory(i) === 'terminated').length;
+  const items = workflowItems();
+  const running = items.filter(i => flowCategory(i) === 'in_progress').length;
+  const blocked = items.filter(i => i.status === 'blocked').length;
+  const done = items.filter(i => flowCategory(i) === 'done').length;
+  const terminated = items.filter(i => flowCategory(i) === 'terminated').length;
   el.innerHTML = `执行中 <strong>${running}</strong> · 阻塞 <strong>${blocked}</strong> · 已归档 <strong>${done}</strong> · 已终止 <strong>${terminated}</strong>`;
   el.className = blocked && isReviewerUser() ? 'workflow-badge workflow-badge--alert' : 'workflow-badge';
 }
@@ -234,7 +321,7 @@ function renderTaskCard(item) {
   return `<div class="task-card ${item.status === 'blocked' ? 'blocked' : ''} ${isReviewer ? '' : 'readonly'}" draggable="${draggable}" data-id="${item.id}">
     <div class="task-card-top">
       ${item.req_no ? `<span class="req-no-tag">${esc(item.req_no)}</span>` : '<span class="task-card-spacer"></span>'}
-      <div class="task-card-badges">${roleBadge}<span class="project-status-pill ${projectStatusMeta(item).cls}">${projectStatusMeta(item).label}</span></div>
+      <div class="task-card-badges">${priorityBadgeHtml(item, { compact: true })}${roleBadge}<span class="project-status-pill ${projectStatusMeta(item).cls}">${projectStatusMeta(item).label}</span></div>
     </div>
     <div class="task-card-title">${esc(item.title)}</div>
     <div class="task-card-people">${taskPeopleHtml(item)}</div>
@@ -277,7 +364,7 @@ function toggleProfileShowAll() {
 
 function kanbanBaseItems() {
   const items = state.items.filter(i => i.req_no || i.reviewer || i.assignee);
-  return items.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  return sortByPriority(items);
 }
 
 function applyKanbanFilters(items, excludeKey = null) {
@@ -341,6 +428,7 @@ function renderKanbanListRow(item) {
     <td class="flow-list-cell flow-list-col-no">${item.req_no ? `<span class="req-no-tag req-no-tag--sm">${esc(item.req_no)}</span>` : '<span class="flow-list-empty">-</span>'}</td>
     <td class="flow-list-title" title="${esc(item.title)}">${esc(item.title)}</td>
     <td class="flow-list-cell flow-list-col-status"><span class="project-status-pill project-status-pill--sm ${meta.cls}">${meta.label}</span></td>
+    <td class="flow-list-cell flow-list-col-priority" onclick="event.stopPropagation()">${priorityControlHtml(item, { editable: canEditTaskPriority(item) })}</td>
     <td class="flow-list-cell flow-list-col-person">${esc(item.created_by || '-')}</td>
     <td class="flow-list-cell flow-list-col-person">${esc(item.reviewer || '-')}</td>
     <td class="flow-list-cell flow-list-col-person">${esc(item.assignee || '-')}</td>
@@ -356,12 +444,12 @@ function renderKanbanListHtml(items) {
   return `<div class="project-table-wrap flow-list-wrap">
     <table class="project-table flow-list-table">
       <colgroup>
-        <col class="flow-list-w-no"><col class="flow-list-w-title"><col class="flow-list-w-status">
+        <col class="flow-list-w-no"><col class="flow-list-w-title"><col class="flow-list-w-status"><col class="flow-list-w-priority">
         <col class="flow-list-w-person"><col class="flow-list-w-person"><col class="flow-list-w-person"><col class="flow-list-w-person">
         <col class="flow-list-w-time"><col class="flow-list-w-time"><col class="flow-list-w-action">
       </colgroup>
       <thead><tr>
-        <th>编号</th><th>任务名称</th><th>状态</th>
+        <th>编号</th><th>任务名称</th><th>状态</th><th>优先级</th>
         <th>提出人</th><th>审核人</th><th>主执行</th><th>协助人</th>
         <th>开始</th><th>更新</th><th>操作</th>
       </tr></thead>
@@ -377,6 +465,7 @@ function kanbanListExportRow(item) {
     item.req_no || '',
     item.title || '',
     meta.label,
+    priorityMeta(item.priority).label,
     item.created_by || '',
     item.reviewer || '',
     item.assignee || '',
@@ -392,7 +481,7 @@ function exportKanbanList() {
     toast('暂无数据可导出', 'error');
     return;
   }
-  const headers = ['任务编号', '任务名称', '状态', '需求提出人', '审核人', '主执行人', '其他执行人', '开始时间', '最近更新时间'];
+  const headers = ['任务编号', '任务名称', '状态', '优先级', '需求提出人', '审核人', '主执行人', '其他执行人', '开始时间', '最近更新时间'];
   const csv = '\uFEFF' + [headers, ...filtered.map(kanbanListExportRow)]
     .map(row => row.map(csvCell).join(','))
     .join('\r\n');
@@ -451,7 +540,7 @@ function renderKanbanFilterBar(baseItems) {
 function renderKanbanBoard(items) {
   return `<div class="kanban" id="kanban">
     ${FLOW_COLS.map(col => {
-      const cards = items.filter(i => flowCategory(i) === col.id);
+      const cards = sortByPriority(items.filter(i => flowCategory(i) === col.id));
       const overWip = cards.length > WIP_LIMITS[col.id];
       return `<div class="kanban-col" data-status="${col.id}">
         <div class="kanban-col-header" style="border-top:3px solid ${col.color}">
@@ -485,6 +574,348 @@ function ganttEndDate(item) {
   if (dl) return new Date(`${dl}T23:59:59`);
   const sp = item.story_points || 3;
   return new Date(new Date(item.created_at).getTime() + sp * 2 * 86400000);
+}
+
+function isItemOverdue(item) {
+  return flowCategory(item) === 'in_progress' && ganttEndDate(item).getTime() < Date.now();
+}
+
+function activityIcon(action) {
+  return {
+    progress: '📤', created: '➕', status_change: '🔄', completed: '✅',
+    dispatched: '🚀', reviewer_terminate: '⏹', reviewer_reassign: '🔁',
+    reviewer_revoke: '↩', reviewer_reject: '↩', confirmed: '✔️', priority_changed: '🎯',
+    deleted: '🗑', auto_approved: '✅', auto_assigned: '🤖',
+  }[action] || '•';
+}
+
+function buildCockpitStats() {
+  const today = new Date().toISOString().slice(0, 10);
+  const items = workflowItems();
+  const activeItems = items.filter(i => flowCategory(i) === 'in_progress' || i.status === 'blocked');
+  const counts = {
+    in_progress: items.filter(i => flowCategory(i) === 'in_progress').length,
+    blocked: items.filter(i => i.status === 'blocked').length,
+    done: items.filter(i => flowCategory(i) === 'done').length,
+    terminated: items.filter(i => flowCategory(i) === 'terminated').length,
+  };
+  const total = counts.in_progress + counts.blocked + counts.done + counts.terminated || 1;
+  const p1Active = activeItems.filter(i => normalizePriority(i.priority) === 1);
+  const noProgressToday = items.filter(i =>
+    flowCategory(i) === 'in_progress' && i.assignee && !hasProgressToday(i, today)
+  );
+  const overdueItems = items.filter(i => isItemOverdue(i));
+  const wipPct = Math.min(100, Math.round((counts.in_progress / WIP_LIMITS.in_progress) * 100));
+  const wipOver = counts.in_progress > WIP_LIMITS.in_progress;
+
+  let health = 100;
+  health -= counts.blocked * 15;
+  if (wipOver) health -= 20;
+  else if (wipPct >= 80) health -= 8;
+  health -= Math.min(noProgressToday.length * 5, 25);
+  health -= Math.min(overdueItems.length * 8, 24);
+  health = Math.max(0, Math.min(100, Math.round(health)));
+
+  const healthRag = health >= 80 ? 'green' : health >= 60 ? 'yellow' : 'red';
+  return {
+    counts, total, p1Active, noProgressToday, overdueItems, wipPct, wipOver, health, healthRag, today,
+  };
+}
+
+function buildActionQueue(stats) {
+  const items = workflowItems();
+  const seen = new Set();
+  const queue = [];
+  const push = (item, kind, label) => {
+    if (!item?.id || seen.has(item.id)) return;
+    seen.add(item.id);
+    queue.push({ item, kind, label });
+  };
+  sortByPriority(items.filter(i => i.status === 'blocked')).forEach(i => push(i, 'blocked', '阻塞'));
+  items.filter(i =>
+    flowCategory(i) === 'in_progress' && normalizePriority(i.priority) === 1 && !hasProgressToday(i, stats.today)
+  ).forEach(i => push(i, 'p1_no_progress', 'P1 · 今日未报'));
+  sortByPriority(items.filter(i => isItemOverdue(i))).forEach(i => push(i, 'overdue', '超期'));
+  sortByPriority(items.filter(i =>
+    flowCategory(i) === 'in_progress' && normalizePriority(i.priority) === 1
+  )).forEach(i => push(i, 'p1', 'P1 待推进'));
+  return queue.slice(0, 8);
+}
+
+function buildFlowTrend(days = 7) {
+  const base = workflowItems();
+  const buckets = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    const ts = new Date(d);
+    ts.setHours(23, 59, 59, 999);
+    const tsMs = ts.getTime();
+    let in_progress = 0;
+    let blocked = 0;
+    let done = 0;
+    base.forEach(item => {
+      const created = new Date(item.created_at || 0).getTime();
+      if (created > tsMs) return;
+      const completed = item.completed_at ? new Date(item.completed_at).getTime() : null;
+      if (completed && completed <= tsMs) {
+        if (item.status === 'done') done++;
+        return;
+      }
+      if (item.status === 'terminated') return;
+      if (item.status === 'blocked') blocked++;
+      else if (ACTIVE_STATUSES.includes(item.status) || item.status === 'in_progress') in_progress++;
+    });
+    buckets.push({ date: d.toISOString().slice(0, 10), label: fmtDateShort(d), in_progress, blocked, done });
+  }
+  return buckets;
+}
+
+function renderFlowTrendChart(buckets) {
+  const max = Math.max(1, ...buckets.flatMap(b => [b.in_progress, b.blocked, b.done]));
+  return `<div class="gk-trend-chart">${buckets.map(b => {
+    const h1 = Math.round((b.in_progress / max) * 100);
+    const h2 = Math.round((b.blocked / max) * 100);
+    const h3 = Math.round((b.done / max) * 100);
+    return `<div class="gk-trend-col" title="${b.label}">
+      <div class="gk-trend-stack">
+        <span class="gk-trend-seg gk-trend-seg--done" style="height:${h3}%"></span>
+        <span class="gk-trend-seg gk-trend-seg--block" style="height:${h2}%"></span>
+        <span class="gk-trend-seg gk-trend-seg--run" style="height:${h1}%"></span>
+      </div>
+      <span class="gk-trend-lbl">${b.label}</span>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function goTaskCenterPerson(name) {
+  state.kanbanFilter = { flow: 'all', reviewer: '', executor: name };
+  state.kanbanViewMode = 'list';
+  navigate('taskcenter');
+}
+
+function updateGlobalKanbanChrome(stats) {
+  const healthEl = document.getElementById('gk-health-wrap');
+  if (healthEl) {
+    healthEl.className = `gk-health-badge gk-health--${stats.healthRag}`;
+    healthEl.innerHTML = `<span class="gk-health-dot"></span> 流动健康 <strong>${stats.health}</strong> 分`;
+    healthEl.title = `阻塞 -${stats.counts.blocked * 15} · WIP${stats.wipOver ? '超限 -20' : stats.wipPct >= 80 ? '偏高 -8' : ''} · 今日未报 -${Math.min(stats.noProgressToday.length * 5, 25)} · 超期 -${Math.min(stats.overdueItems.length * 8, 24)}`;
+  }
+}
+
+function taskProgressPulse(item, days = 7) {
+  const today = new Date().toISOString().slice(0, 10);
+  const bars = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    const dayStr = d.toISOString().slice(0, 10);
+    const has = (item.progress_updates || []).some(u => u.date === dayStr);
+    bars.push({ has, isToday: dayStr === today });
+  }
+  return bars;
+}
+
+function lastProgressLabel(item) {
+  const latest = (item.progress_updates || [])[0];
+  if (!latest?.date) return '暂无进展';
+  const today = new Date().toISOString().slice(0, 10);
+  if (latest.date === today) return '今日';
+  const daysAgo = Math.floor((Date.now() - new Date(`${latest.date}T12:00:00`).getTime()) / 86400000);
+  if (daysAgo === 1) return '昨日';
+  return `${daysAgo}天前`;
+}
+
+function taskStaleDays(item) {
+  const latest = (item.progress_updates || [])[0];
+  if (!latest?.date) return 99;
+  return Math.floor((Date.now() - new Date(`${latest.date}T12:00:00`).getTime()) / 86400000);
+}
+
+function buildFlowPieGradient(stats) {
+  const { counts, total } = stats;
+  if (!total) return '#e2e8f0';
+  const slices = FLOW_COLS.map(col => ({ color: col.color, count: counts[col.id] })).filter(s => s.count > 0);
+  if (!slices.length) return '#e2e8f0';
+  let deg = 0;
+  return `conic-gradient(${slices.map(s => {
+    const sweep = (s.count / total) * 360;
+    const start = deg;
+    deg += sweep;
+    return `${s.color} ${start}deg ${deg}deg`;
+  }).join(', ')})`;
+}
+
+function buildExecutingInsight(stats) {
+  const today = stats.today;
+  const running = workflowItems().filter(i => flowCategory(i) === 'in_progress');
+  const reportedToday = running.filter(i => hasProgressToday(i, today));
+  const notReportedToday = running.filter(i => i.assignee && !hasProgressToday(i, today));
+  const updateRate = running.length ? Math.round((reportedToday.length / running.length) * 100) : 0;
+  const rateRag = updateRate >= 70 ? 'green' : updateRate >= 50 ? 'yellow' : 'red';
+
+  const activePeople = new Set();
+  workflowItems().forEach(item => {
+    (item.progress_updates || []).forEach(u => {
+      const t = u.created_at ? new Date(u.created_at) : (u.date ? new Date(`${u.date}T12:00:00`) : null);
+      if (t && !Number.isNaN(t.getTime()) && Date.now() - t.getTime() < 7 * 86400000 && u.user) {
+        activePeople.add(u.user);
+      }
+    });
+  });
+
+  const personMap = {};
+  running.forEach(item => {
+    involvedExecutors(item).forEach(name => {
+      if (!personMap[name]) personMap[name] = { name, primary: 0, assist: 0, progress7: 0, reportStatus: 'no', reportLabel: '未报' };
+      if (item.assignee === name) personMap[name].primary++;
+      else personMap[name].assist++;
+    });
+  });
+  Object.values(personMap).forEach(p => {
+    const rs = getPersonReportStatus(p.name, running, today);
+    p.reportStatus = rs.status;
+    p.reportLabel = rs.label;
+    p.reportedPrimary = rs.reportedPrimary;
+    p.reportedAssist = rs.reportedAssist;
+  });
+  running.forEach(item => {
+    (item.progress_updates || []).forEach(u => {
+      const t = u.created_at ? new Date(u.created_at) : (u.date ? new Date(`${u.date}T12:00:00`) : null);
+      if (t && !Number.isNaN(t.getTime()) && Date.now() - t.getTime() < 7 * 86400000 && u.user && personMap[u.user]) {
+        personMap[u.user].progress7++;
+      }
+    });
+  });
+  const persons = Object.values(personMap).sort((a, b) => b.progress7 - a.progress7 || b.primary - a.primary).slice(0, 6);
+  const maxProg = Math.max(1, ...persons.map(p => p.progress7));
+
+  const tasks = sortByPriority([...running])
+    .sort((a, b) => (hasProgressToday(a, today) ? 1 : 0) - (hasProgressToday(b, today) ? 1 : 0) || normalizePriority(a.priority) - normalizePriority(b.priority))
+    .slice(0, 8)
+    .map(item => ({
+      item,
+      pulse: taskProgressPulse(item),
+      lastLabel: lastProgressLabel(item),
+      todayOk: hasProgressToday(item, today),
+      staleDays: taskStaleDays(item),
+    }));
+
+  return {
+    runningCount: running.length,
+    reportedCount: reportedToday.length,
+    notReportedCount: notReportedToday.length,
+    activePeopleCount: activePeople.size,
+    updateRate,
+    rateRag,
+    persons: persons.map(p => ({
+      ...p,
+      heatPct: Math.round((p.progress7 / maxProg) * 100),
+      heatCls: p.progress7 >= maxProg * 0.7 ? 'hot' : p.progress7 >= maxProg * 0.35 ? 'warm' : 'cool',
+    })),
+    tasks,
+  };
+}
+
+function renderFlowPiePanel(stats) {
+  const { counts, total } = stats;
+  const gradient = buildFlowPieGradient(stats);
+  const runPct = total ? Math.round((counts.in_progress / total) * 100) : 0;
+  const legend = FLOW_COLS.map(col => {
+    const count = counts[col.id];
+    const pct = total ? Math.round((count / total) * 100) : 0;
+    return `<div class="gk-pie-legend-row" onclick="goTaskCenter('${col.id}', '${col.id === 'in_progress' ? 'board' : 'list'}')" title="查看${col.label}">
+      <span class="gk-pie-legend-left"><i class="gk-pie-dot" style="background:${col.color}"></i>${col.label}</span>
+      <span><strong>${count}</strong> <span class="gk-pie-pct">${pct}%</span></span>
+    </div>`;
+  }).join('');
+
+  return `<div id="gk-viz-pie" class="dashboard-panel gk-panel gk-viz-pie">
+    <div class="gk-panel-head">
+      <span class="section-title">四态分布</span>
+      <span class="gk-panel-sub">共 ${total} 项${stats.wipOver ? ` · <span class="gk-wip-warn">WIP ${counts.in_progress}/${WIP_LIMITS.in_progress} 超限</span>` : ''} · 点击图例筛选</span>
+    </div>
+    <div class="gk-pie-wrap">
+      <div class="gk-pie-chart" style="background:${gradient}">
+        <div class="gk-pie-center">
+          <strong class="gk-pie-run-val">${counts.in_progress}</strong>
+          <span>执行中 ${runPct}%</span>
+        </div>
+      </div>
+      <div class="gk-pie-legend">${legend}</div>
+    </div>
+  </div>`;
+}
+
+function renderExecutingInsightPanel(insight) {
+  const ringDeg = Math.round((insight.updateRate / 100) * 360);
+  const ringColor = insight.rateRag === 'green' ? '#22c55e' : insight.rateRag === 'yellow' ? STAR_GOLD : '#ef4444';
+
+  const personRows = insight.persons.length ? insight.persons.map(p => {
+    const tip = [
+      p.primary ? `主执行今日本人已报 ${p.reportedPrimary}/${p.primary} 项` : null,
+      p.assist ? `协助今日本人已报 ${p.reportedAssist}/${p.assist} 项` : null,
+    ].filter(Boolean).join(' · ');
+    return `
+    <div class="gk-ph-row" onclick='goTaskCenterPerson(${JSON.stringify(p.name)})'>
+      <span class="gk-ph-name">${esc(p.name)}</span>
+      <div class="gk-ph-bar-wrap"><div class="gk-ph-bar gk-ph-bar--${p.heatCls}" style="width:${p.heatPct}%"></div></div>
+      <span class="gk-ph-meta">7日 ${p.progress7} 次 · 主${p.primary}</span>
+      <span class="gk-ph-today ${p.reportStatus}" title="${esc(tip)}">${esc(p.reportLabel)}</span>
+    </div>`;
+  }).join('') : '<div class="empty-state">暂无执行中人员</div>';
+
+  const taskRows = insight.tasks.length ? insight.tasks.map(({ item, pulse, lastLabel, todayOk, staleDays }) => {
+    const badge = todayOk ? '<span class="gk-tv-badge gk-tv-badge--ok">今日已报</span>'
+      : staleDays >= 3 ? `<span class="gk-tv-badge gk-tv-badge--stale">${staleDays}日未动</span>`
+      : '<span class="gk-tv-badge gk-tv-badge--no">今日未报</span>';
+    const pulseHtml = pulse.map(b =>
+      `<span class="${b.has ? (b.isToday ? 'today' : 'on') : ''}"></span>`
+    ).join('');
+    const pri = priorityMeta(item.priority);
+    return `<div class="gk-tv-item" onclick="showTaskDetailView('${item.id}')">
+      <div class="gk-tv-info">
+        <div class="gk-tv-title">${item.req_no ? `<span class="req-no-tag req-no-tag--sm">${esc(item.req_no)}</span> ` : ''}${esc(item.title)}</div>
+        <div class="gk-tv-sub">${esc(item.assignee || '-')} · ${pri.short} · 最近：${lastLabel}</div>
+      </div>
+      <div class="gk-tv-pulse" title="过去7天每日进展">${pulseHtml}</div>
+      ${badge}
+    </div>`;
+  }).join('') : '<div class="empty-state">暂无执行中任务</div>';
+
+  return `<div id="gk-exec-insight" class="dashboard-panel gk-panel gk-viz-exec">
+    <div class="gk-panel-head">
+      <span class="section-title">⚡ 执行中任务洞察</span>
+      <span class="gk-panel-sub">${insight.runningCount} 项进行中</span>
+    </div>
+    <div class="gk-exec-summary">
+      <div class="gk-exec-chip gk-exec-chip--run"><strong>${insight.runningCount}</strong><span>执行中</span></div>
+      <div class="gk-exec-chip gk-exec-chip--ok"><strong>${insight.reportedCount}</strong><span>今日已报</span></div>
+      <div class="gk-exec-chip gk-exec-chip--warn"><strong>${insight.notReportedCount}</strong><span>今日未报</span></div>
+      <div class="gk-exec-chip gk-exec-chip--hot"><strong>${insight.activePeopleCount}</strong><span>7日活跃人数</span></div>
+    </div>
+    <div class="gk-rate-row">
+      <div class="gk-rate-ring gk-rate-ring--${insight.rateRag}" style="background:conic-gradient(${ringColor} 0deg ${ringDeg}deg, #e2e8f0 ${ringDeg}deg 360deg)">
+        <div class="gk-rate-ring-inner"><strong>${insight.updateRate}%</strong><span>今日更新率</span></div>
+      </div>
+      <div class="gk-rate-desc">
+        <p>今日已报 <strong>${insight.reportedCount}</strong> · 未报 <strong>${insight.notReportedCount}</strong></p>
+        <p class="gk-rate-hint">脉搏图：蓝=有进展 · 绿=今日已报 · 灰=无进展</p>
+      </div>
+    </div>
+    <div class="gk-viz-split">
+      <div class="gk-viz-col">
+        <div class="gk-viz-col-title">人员活跃（7日 + 今日）</div>
+        <div class="gk-ph-list">${personRows}</div>
+      </div>
+      <div class="gk-viz-col">
+        <div class="gk-viz-col-title">任务脉搏（近7日）</div>
+        <div class="gk-tv-list" id="gk-tv-list">${taskRows}</div>
+      </div>
+    </div>
+  </div>`;
 }
 
 function fmtDateShort(d) {
@@ -585,81 +1016,11 @@ function renderGanttTicks(rangeStart, rangeEnd) {
   return ticks.join('');
 }
 
-function renderMiniKanbanSnapshot() {
-  const base = workflowItems();
-  return `<div class="gk-mini-board">${FLOW_COLS.map(col => {
-    const cards = base.filter(i => flowCategory(i) === col.id).slice(0, 4);
-    return `<div class="gk-mini-col" data-status="${col.id}">
-      <div class="gk-mini-col-head" style="border-top:3px solid ${col.color}">
-        <span>${col.label}</span><span class="count">${base.filter(i => flowCategory(i) === col.id).length}</span>
-      </div>
-      <div class="gk-mini-cards">
-        ${cards.map(i => `<div class="gk-mini-card" onclick="showItemDetail('${i.id}')" title="${esc(i.title)}">
-          ${i.req_no ? `<span class="req-no-tag">${esc(i.req_no)}</span>` : ''}
-          <div class="gk-mini-title">${esc(i.title)}</div>
-          <div class="gk-mini-meta">${esc(i.assignee || '-')} · ${projectStatusMeta(i).label}</div>
-        </div>`).join('') || '<div class="gk-mini-empty">暂无</div>'}
-      </div>
-    </div>`;
-  }).join('')}</div>`;
+function renderGanttPanelContent(gantt) {
+  return `<div class="gk-gantt-sub">${fmtDateShort(gantt.rangeStart)} — ${fmtDateShort(gantt.rangeEnd)} · 竖线=今日</div>${renderGanttPanelInner(gantt)}`;
 }
 
-function renderGlobalKanbanBody() {
-  const m = state.metrics;
-  const counts = {
-    in_progress: state.items.filter(i => flowCategory(i) === 'in_progress').length,
-    blocked: state.items.filter(i => i.status === 'blocked').length,
-    done: state.items.filter(i => flowCategory(i) === 'done').length,
-    terminated: state.items.filter(i => flowCategory(i) === 'terminated').length,
-  };
-  const total = counts.in_progress + counts.blocked + counts.done + counts.terminated || 1;
-  const wipPct = Math.min(100, Math.round((counts.in_progress / WIP_LIMITS.in_progress) * 100));
-  const members = buildMemberActivity(7);
-  const workloads = buildWorkloadStats();
-  const gantt = buildGanttRows();
-  const updated = state.globalKanbanUpdatedAt || new Date();
-
-  const flowCards = FLOW_COLS.map(col => {
-    const count = counts[col.id];
-    const pct = Math.round((count / total) * 100);
-    const wipNote = col.id === 'in_progress' ? `WIP ${count}/${WIP_LIMITS.in_progress}`
-      : col.id === 'blocked' ? (count ? '需立即处理' : '流动顺畅')
-      : col.id === 'terminated' ? '领导终止' : '累计完成';
-    const icon = col.id === 'in_progress' ? '⚡' : col.id === 'blocked' ? '🚧' : col.id === 'terminated' ? '⏹' : '✅';
-    return `<div class="flow-stat-card flow-stat-${col.id}" onclick="goTaskCenter('${col.id}', '${col.id === 'in_progress' ? 'board' : 'list'}')">
-      <div class="flow-stat-icon">${icon}</div>
-      <div class="flow-stat-body">
-        <div class="flow-stat-label">${col.label}</div>
-        <div class="flow-stat-value">${count}</div>
-        <div class="flow-stat-sub">${wipNote} · 占比 ${pct}%</div>
-        <div class="flow-stat-bar"><div class="flow-stat-fill" style="width:${pct}%;background:${col.color}"></div></div>
-      </div>
-    </div>`;
-  }).join('');
-
-  const activityIcon = (action) => ({
-    progress: '📤', created: '➕', status_change: '🔄', completed: '✅',
-    dispatched: '🚀', reviewer_terminate: '⏹', reviewer_reassign: '🔁',
-    reviewer_revoke: '↩', confirmed: '✔️',
-  }[action] || '•');
-
-  const memberBars = members.length ? members.slice(0, 8).map(mem => {
-    const heat = mem.pct >= 70 ? 'hot' : mem.pct >= 35 ? 'warm' : 'cool';
-    return `<div class="gk-member-row">
-      <div class="gk-member-name">${esc(mem.name)}</div>
-      <div class="gk-member-bar-wrap"><div class="gk-member-bar gk-member-bar--${heat}" style="width:${mem.pct}%"></div></div>
-      <div class="gk-member-stats"><span title="操作">${mem.actions}</span>/<span title="进展">${mem.progress}</span></div>
-    </div>`;
-  }).join('') : '<div class="empty-state">近7日暂无活动记录</div>';
-
-  const workloadRows = workloads.length ? workloads.slice(0, 8).map(w => `<div class="gk-workload-row">
-    <span class="gk-workload-name">${esc(w.name)}</span>
-    <span class="gk-workload-chip">主 ${w.primary}</span>
-    <span class="gk-workload-chip">协 ${w.assist}</span>
-    ${w.blocked ? `<span class="gk-workload-chip gk-workload-chip--danger">阻 ${w.blocked}</span>` : ''}
-    <span class="gk-workload-sp">${w.points} SP</span>
-  </div>`).join('') : '<div class="empty-state">暂无进行中任务</div>';
-
+function renderGanttPanelInner(gantt) {
   const ganttBody = gantt.items.length ? gantt.items.map(r => `<div class="gk-gantt-row">
     <div class="gk-gantt-label" onclick="showItemDetail('${r.id}')" title="${esc(r.title)}">
       <span class="req-no-tag">${esc(r.reqNo)}</span>
@@ -671,111 +1032,184 @@ function renderGlobalKanbanBody() {
       <div class="gk-gantt-today" style="left:${gantt.nowPct}%"></div>
     </div>
   </div>`).join('') : '<div class="empty-state" style="padding:1.5rem">暂无甘特图数据</div>';
+  return `<div class="gk-gantt">
+    <div class="gk-gantt-axis">
+      <div class="gk-gantt-label-col">任务 / 执行人</div>
+      <div class="gk-gantt-ticks">${renderGanttTicks(gantt.rangeStart, gantt.rangeEnd)}</div>
+    </div>
+    ${ganttBody}
+  </div>`;
+}
+
+function renderDashboardKpiStrip(stats, metrics) {
+  const m = metrics || state.metrics;
+  return `
+    <div class="kpi-chip"><span class="kpi-label">近14天吞吐量</span><strong>${m.throughput}</strong><span class="kpi-unit">项</span></div>
+    <div class="kpi-chip"><span class="kpi-label">平均 Lead Time</span><strong>${m.avgLeadTime}</strong><span class="kpi-unit">天</span></div>
+    <div class="kpi-chip ${stats.p1Active.length ? 'kpi-alert' : ''}"><span class="kpi-label">P1 待推进</span><strong>${stats.p1Active.length}</strong><span class="kpi-unit">项</span></div>
+    <div class="kpi-chip ${stats.overdueItems.length ? 'kpi-alert' : ''}"><span class="kpi-label">超期任务</span><strong>${stats.overdueItems.length}</strong><span class="kpi-unit">项</span></div>`;
+}
+
+function renderActionQueueRows(actionQueue) {
+  return actionQueue.length ? actionQueue.map(({ item, kind, label }) => `
+    <div class="gk-action-item ${kind === 'blocked' || kind === 'p1_no_progress' ? 'gk-action-item--urgent' : ''}" onclick="showTaskDetailView('${item.id}')">
+      ${item.req_no ? `<span class="req-no-tag req-no-tag--sm">${esc(item.req_no)}</span>` : ''}
+      ${normalizePriority(item.priority) === 1 ? '<span class="gk-action-p1">P1</span>' : ''}
+      <span class="gk-action-title">${esc(item.title)}</span>
+      <span class="gk-action-meta">${esc(label)} · ${esc(item.assignee || '-')}</span>
+    </div>`).join('') : '<div class="empty-state">暂无待处理事项 🎉</div>';
+}
+
+function feedOneLine(a) {
+  if (a.action === 'progress') {
+    const text = (a.progress_text || '').trim() || '（无说明）';
+    const task = a.item_title || '任务';
+    return `${a.actor || '系统'} · ${task} · ${text}`;
+  }
+  return `${a.actor || '系统'} · ${a.detail || ''}${a.item_title ? ` · ${a.item_title}` : ''}`;
+}
+
+function renderActivityFeedHtml(limit = 6) {
+  return state.activity.slice(0, limit).map(a => {
+    const line = feedOneLine(a);
+    return `<div class="gk-feed-item" title="${esc(line)}">
+      <span class="gk-feed-icon">${activityIcon(a.action)}</span>
+      <span class="gk-feed-line">${esc(line)}</span>
+      <span class="gk-feed-time">${fmtTime(a.created_at)}</span>
+    </div>`;
+  }).join('') || '<div class="gk-feed-empty">暂无动态</div>';
+}
+
+function renderActivityFeedPanel(topInsight) {
+  const banner = topInsight ? `<div class="gk-insight-banner gk-insight-banner--compact ${topInsight.severity}">
+    <strong>🧠 ${esc(topInsight.title)}</strong>
+    <span>${esc(topInsight.content.slice(0, 72))}${topInsight.content.length > 72 ? '…' : ''}</span>
+  </div>` : '';
+  return `<div id="gk-feed-panel" class="dashboard-panel gk-panel gk-feed-panel">
+    ${banner}
+    <div class="gk-feed-head-bar">
+      <span class="gk-feed-title">🔴 实时动态</span>
+      <span class="gk-live-dot"></span>
+    </div>
+    <div class="gk-feed gk-feed--compact" id="gk-feed">${renderActivityFeedHtml()}</div>
+  </div>`;
+}
+
+function updateDashboardLivePanels() {
+  const stats = buildCockpitStats();
+  const execInsight = buildExecutingInsight(stats);
+  const trend = buildFlowTrend(7);
+  const actionQueue = buildActionQueue(stats);
+
+  const kpi = document.getElementById('gk-kpi-strip');
+  if (kpi) kpi.innerHTML = renderDashboardKpiStrip(stats);
+
+  const pie = document.getElementById('gk-viz-pie');
+  if (pie) pie.outerHTML = renderFlowPiePanel(stats);
+
+  const exec = document.getElementById('gk-exec-insight');
+  if (exec) exec.outerHTML = renderExecutingInsightPanel(execInsight);
+
+  const topInsight = state.insights.find(i => i.severity === 'warning') || state.insights[0];
+  refreshActivityFeedDom();
+
+  const actionSub = document.querySelector('#gk-action-panel .gk-panel-sub');
+  if (actionSub) actionSub.textContent = `${actionQueue.length} 项`;
+  const actionList = document.getElementById('gk-action-list');
+  if (actionList) actionList.innerHTML = renderActionQueueRows(actionQueue);
+
+  const trendWrap = document.getElementById('gk-trend-chart-wrap');
+  if (trendWrap) {
+    trendWrap.innerHTML = `${renderFlowTrendChart(trend)}
+        <div class="gk-trend-legend">
+          <span><i class="gk-legend-run"></i>执行中</span>
+          <span><i class="gk-legend-block"></i>阻塞</span>
+          <span><i class="gk-legend-done"></i>归档</span>
+        </div>`;
+  }
+
+  const ganttDetail = document.getElementById('gk-detail-content');
+  if (ganttDetail) ganttDetail.innerHTML = renderGanttPanelContent(buildGanttRows());
+
+  updateGlobalKanbanChrome(stats);
+  updateWorkflowBadge();
+  return stats;
+}
+
+function renderGlobalKanbanBody() {
+  const m = state.metrics;
+  const stats = buildCockpitStats();
+  const { counts, total } = stats;
+  const trend = buildFlowTrend(7);
+  const actionQueue = buildActionQueue(stats);
+  const gantt = buildGanttRows();
+  const execInsight = buildExecutingInsight(stats);
+  const topInsight = state.insights.find(i => i.severity === 'warning') || state.insights[0];
+
+  const actionRows = renderActionQueueRows(actionQueue);
 
   return `
-    <div class="dashboard-flow-strip">
-      <span class="flow-step">📤 需求提交</span><span class="flow-arrow">→</span>
-      <span class="flow-step">🔍 自动审核分配</span><span class="flow-arrow">→</span>
-      <span class="flow-step active">⚡ 执行中</span><span class="flow-arrow">→</span>
-      <span class="flow-step warn">🚧 阻塞处理</span><span class="flow-arrow">→</span>
-      <span class="flow-step done">📦 已归档</span><span class="flow-arrow">·</span>
-      <span class="flow-step terminated">⏹ 已终止</span>
+    <div id="gk-kpi-strip" class="dashboard-kpi-strip gk-kpi-compact">
+      ${renderDashboardKpiStrip(stats, m)}
     </div>
 
-    <div class="dashboard-summary">
-      <div class="dashboard-flow-cards">${flowCards}</div>
-      <div class="dashboard-kpi-strip">
-        <div class="kpi-chip"><span class="kpi-label">近14天吞吐量</span><strong>${m.throughput}</strong><span class="kpi-unit">项</span></div>
-        <div class="kpi-chip"><span class="kpi-label">平均 Lead Time</span><strong>${m.avgLeadTime}</strong><span class="kpi-unit">天</span></div>
-        <div class="kpi-chip"><span class="kpi-label">WIP 使用率</span><strong>${wipPct}%</strong><span class="kpi-unit">${counts.in_progress}/${WIP_LIMITS.in_progress}</span></div>
-        <div class="kpi-chip ${counts.blocked ? 'kpi-alert' : ''}"><span class="kpi-label">待处理阻塞</span><strong>${counts.blocked}</strong><span class="kpi-unit">项</span></div>
-      </div>
+    <div class="gk-viz-board">
+      ${renderFlowPiePanel(stats)}
+      ${renderExecutingInsightPanel(execInsight)}
     </div>
 
-    <div class="gk-triple-grid">
-      <div class="dashboard-panel gk-panel">
-        <div class="gk-panel-head"><span class="section-title">👥 人员活跃程度</span><span class="gk-panel-sub">近 7 日 · 操作/进展</span></div>
-        <div class="gk-member-list">${memberBars}</div>
+    <div class="gk-l2-grid">
+      <div id="gk-action-panel" class="dashboard-panel gk-panel gk-action-panel">
+        <div class="gk-panel-head">
+          <span class="section-title">⚠️ 需立即处理</span>
+          <span class="gk-panel-sub">${actionQueue.length} 项</span>
+        </div>
+        <div id="gk-action-list" class="gk-action-list">${actionRows}</div>
+        <div class="gk-action-foot">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('blocked','list')">全部阻塞 →</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('in_progress','list')">执行中列表 →</button>
+        </div>
       </div>
-      <div class="dashboard-panel gk-panel">
-        <div class="gk-panel-head"><span class="section-title">📊 任务态势</span><span class="gk-panel-sub">进行中负载</span></div>
-        <div class="gk-workload-list">${workloadRows}</div>
-      </div>
-      <div class="dashboard-panel gk-panel">
-        <div class="gk-panel-head"><span class="section-title">🔴 实时动态</span><span class="gk-live-dot"></span></div>
-        <div class="activity-timeline gk-activity-compact">
-          ${state.activity.slice(0, 5).map(a => `
-            <div class="activity-timeline-item">
-              <span class="activity-icon">${activityIcon(a.action)}</span>
-              <div class="activity-body">
-                <div class="activity-title"><strong>${esc(a.item_title || '系统')}</strong></div>
-                <div class="activity-detail">${esc(a.detail)}</div>
-                <div class="activity-time">${fmtTime(a.created_at)} · ${esc(a.actor || '')}</div>
-              </div>
-            </div>`).join('') || '<div class="empty-state">暂无动态</div>'}
+      <div id="gk-trend-panel" class="dashboard-panel gk-panel">
+        <div class="gk-panel-head">
+          <span class="section-title">📈 近 7 日流动趋势</span>
+          <span class="gk-panel-sub">执行 / 阻塞 / 归档</span>
+        </div>
+        <div id="gk-trend-chart-wrap">
+          ${renderFlowTrendChart(trend)}
+          <div class="gk-trend-legend">
+            <span><i class="gk-legend-run"></i>执行中</span>
+            <span><i class="gk-legend-block"></i>阻塞</span>
+            <span><i class="gk-legend-done"></i>归档</span>
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="dashboard-panel gk-gantt-panel">
-      <div class="gk-panel-head">
-        <span class="section-title">📅 项目甘特图</span>
-        <span class="gk-panel-sub">${fmtDateShort(gantt.rangeStart)} — ${fmtDateShort(gantt.rangeEnd)} · 竖线=今日</span>
-        <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('all','board')">任务中心 →</button>
-      </div>
-      <div class="gk-gantt">
-        <div class="gk-gantt-axis">
-          <div class="gk-gantt-label-col">任务 / 执行人</div>
-          <div class="gk-gantt-ticks">${renderGanttTicks(gantt.rangeStart, gantt.rangeEnd)}</div>
-        </div>
-        ${ganttBody}
-      </div>
-    </div>
+    ${renderActivityFeedPanel(topInsight)}
 
-    <div class="dashboard-panel gk-mini-panel">
-      <div class="gk-panel-head">
-        <span class="section-title">📋 四态流动快照</span>
-        <span class="gk-panel-sub">点击卡片查看详情 · 每列最多 4 项</span>
-      </div>
-      ${renderMiniKanbanSnapshot()}
-    </div>
-
-    <div class="dashboard-body">
-      <div class="dashboard-panel">
-        <div class="section-title">最近动态</div>
-        <div class="activity-timeline">
-          ${state.activity.slice(0, 8).map(a => `
-            <div class="activity-timeline-item">
-              <span class="activity-icon">${activityIcon(a.action)}</span>
-              <div class="activity-body">
-                <div class="activity-title"><strong>${esc(a.item_title || '系统')}</strong></div>
-                <div class="activity-detail">${esc(a.detail)}</div>
-                <div class="activity-time">${fmtTime(a.created_at)} · ${esc(a.actor || '')}</div>
-              </div>
-            </div>`).join('') || '<div class="empty-state">暂无活动</div>'}
+    <div class="gk-l3-grid gk-l3-single">
+      <div class="dashboard-panel gk-panel gk-detail-panel">
+        <div class="gk-panel-head">
+          <span class="section-title">📅 甘特图</span>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('all','board')">任务中心 →</button>
         </div>
-      </div>
-      <div class="dashboard-panel dashboard-insights-panel">
-        <div class="section-title">最新 AI 洞察</div>
-        <div class="insight-grid">
-          ${state.insights.slice(0, 3).map(i => `
-            <div class="insight-card ${i.severity}">
-              <div class="insight-card-title">${esc(i.title)}</div>
-              <div class="insight-card-time">${fmtTime(i.created_at)}</div>
-              <div class="insight-card-content">${esc(i.content.slice(0, 120))}${i.content.length > 120 ? '…' : ''}</div>
-            </div>`).join('') || '<div class="empty-state">点击「站会摘要」或「风险扫描」生成 AI 洞察</div>'}
-        </div>
+        <div id="gk-detail-content">${renderGanttPanelContent(gantt)}</div>
       </div>
     </div>`;
 }
 
 function renderGlobalKanban() {
+  const stats = buildCockpitStats();
   state.globalKanbanUpdatedAt = new Date();
   const ts = state.globalKanbanUpdatedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  return `<div class="dashboard global-kanban">
+  return `<div class="dashboard global-kanban global-kanban--v4">
     <div class="gk-live-bar">
+      <div id="gk-health-wrap" class="gk-health-badge gk-health--${stats.healthRag}" title="流动健康度综合评分">
+        <span class="gk-health-dot"></span> 流动健康 <strong>${stats.health}</strong> 分
+      </div>
       <span class="gk-live-badge"><span class="gk-live-dot"></span> 动态刷新</span>
-      <span class="gk-live-meta" id="gk-last-updated">更新于 ${ts}</span>
+      <span class="gk-live-meta" id="gk-last-updated">更新于 ${ts} · 与任务中心同步</span>
       <button type="button" class="btn btn-ghost btn-sm" onclick="refreshGlobalKanban(true)">↻ 立即刷新</button>
     </div>
     <div id="global-kanban-root">${renderGlobalKanbanBody()}</div>
@@ -792,19 +1226,33 @@ async function refreshGlobalKanban(manual = false) {
     await loadData();
     state.globalKanbanUpdatedAt = new Date();
     const root = document.getElementById('global-kanban-root');
-    if (root) root.innerHTML = renderGlobalKanbanBody();
+    if (root?.querySelector('#gk-exec-insight')) {
+      updateDashboardLivePanels();
+    } else if (root) {
+      root.innerHTML = renderGlobalKanbanBody();
+      updateGlobalKanbanChrome(buildCockpitStats());
+      updateWorkflowBadge();
+    }
     const meta = document.getElementById('gk-last-updated');
     if (meta && state.globalKanbanUpdatedAt) {
-      meta.textContent = `更新于 ${state.globalKanbanUpdatedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${manual ? ' · 手动' : ''}`;
+      meta.textContent = `更新于 ${state.globalKanbanUpdatedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${manual ? ' · 手动' : ' · 自动'} · 与任务中心同步`;
     }
-    updateWorkflowBadge();
   } catch { /* ignore polling errors */ }
 }
 
 function startGlobalKanbanPolling() {
   stopGlobalKanbanPolling();
   if (state.currentView !== 'dashboard' || !isReviewerUser()) return;
-  globalKanbanTimer = setInterval(() => refreshGlobalKanban(false), 15000);
+  globalKanbanTimer = setInterval(() => refreshGlobalKanban(false), DASHBOARD_POLL_MS);
+}
+
+async function reloadViewAfterMutation(preferredView) {
+  const view = preferredView || state.currentView || boardView();
+  if (view === 'dashboard' && isReviewerUser()) {
+    await refreshGlobalKanban(true);
+    return;
+  }
+  await navigate(view);
 }
 
 function renderLeaderDashboard() {
@@ -856,7 +1304,7 @@ function renderKanbanCore() {
 }
 
 function renderTaskCenter() {
-  const blocked = state.items.filter(i => i.status === 'blocked').length;
+  const blocked = kanbanBaseItems().filter(i => i.status === 'blocked').length;
   const blockedAlert = blocked
     ? `<div class="alert-banner">🚧 当前有 <strong>${blocked}</strong> 项阻塞任务${canModifyKanban() ? '待处理' : ''} <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('blocked')">立即查看</button></div>`
     : '';
@@ -892,7 +1340,7 @@ function renderAcceptance() {
         </div>` : ''}
       <div class="criteria"><strong>验收标准:</strong>\n${esc(i.acceptance_criteria || '无')}</div>
       <div class="accept-actions">
-        <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:var(--warning,#f59e0b);color:var(--warning,#f59e0b)">↩ 退回执行中</button>
+        <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:${STAR_GOLD};color:#6b5410">↩ 退回执行中</button>
       </div>
     </div>`;
   }).join('')}`;
@@ -950,16 +1398,121 @@ function renderAI() {
     <p style="font-size:0.78rem;color:var(--muted);margin-top:0.75rem">引擎: ${ai.llm ? `🧠 ${ai.llm.provider}` : '未配置'}</p>`;
 }
 
+function setWorkbenchFilter(filter) {
+  state.workbenchFilter = state.workbenchFilter === filter ? 'all' : filter;
+  if (state.currentView === 'mywork') {
+    document.getElementById('content').innerHTML = renderMyWork();
+  }
+}
+
+function workbenchFilterLabel(filter) {
+  const labels = {
+    all: '全部任务',
+    primary: '待办任务',
+    assist: '协助任务',
+    no_progress: '今日未报进展',
+    blocked: '阻塞任务',
+  };
+  return labels[filter] || '全部任务';
+}
+
+function hasProgressToday(item, today) {
+  const day = today || new Date().toISOString().slice(0, 10);
+  return (item.progress_updates || []).some(u => u.date === day);
+}
+
+function hasPersonalProgressToday(name, item, today) {
+  const day = today || new Date().toISOString().slice(0, 10);
+  return (item.progress_updates || []).some(u => u.date === day && u.user === name);
+}
+
+function involvedExecutors(item) {
+  return [...new Set([item.assignee, ...(item.assistants || [])].filter(Boolean))];
+}
+
+/** 人员今日报送状态：任务看覆盖率，人员看本人是否提交 */
+function getPersonReportStatus(name, running, today) {
+  const day = today || new Date().toISOString().slice(0, 10);
+  const primary = running.filter(i => i.assignee === name);
+  const assist = running.filter(i => (i.assistants || []).includes(name));
+
+  if (primary.length) {
+    const reportedPrimary = primary.filter(i => hasPersonalProgressToday(name, i, day)).length;
+    const reportedAssist = assist.filter(i => hasPersonalProgressToday(name, i, day)).length;
+    let status = 'no';
+    let label = '未报';
+    if (reportedPrimary > 0) {
+      if (primary.length >= 2 && reportedPrimary < primary.length) {
+        status = 'partial';
+        label = `部分 ${reportedPrimary}/${primary.length}`;
+      } else {
+        status = 'ok';
+        label = '已报';
+      }
+    }
+    return { status, label, reportedPrimary, reportedAssist, primaryTotal: primary.length, assistTotal: assist.length };
+  }
+
+  if (assist.length) {
+    const reportedAssist = assist.filter(i => hasPersonalProgressToday(name, i, day)).length;
+    return {
+      status: reportedAssist > 0 ? 'ok' : 'no',
+      label: reportedAssist > 0 ? '已报' : '未报',
+      reportedPrimary: 0,
+      reportedAssist,
+      primaryTotal: 0,
+      assistTotal: assist.length,
+    };
+  }
+
+  return { status: 'no', label: '未报', reportedPrimary: 0, reportedAssist: 0, primaryTotal: 0, assistTotal: 0 };
+}
+
+function renderWorkbenchSummaryChip(filter, label, count, tone = '') {
+  const active = state.workbenchFilter === filter ? ' active' : '';
+  const toneCls = tone ? ` work-summary-chip--${tone}` : '';
+  return `<button type="button" class="work-summary-chip${active}${toneCls}" onclick="setWorkbenchFilter('${filter}')" title="筛选${label}">
+    ${label} <strong>${count}</strong>
+  </button>`;
+}
+
 function renderMyWork() {
   const myItems = (state.myWorkItems?.length ? state.myWorkItems : state.items.filter(i =>
     (i.assignee === state.user.name || (i.assistants || []).includes(state.user.name)) && (ACTIVE_STATUSES.includes(i.status) || i.status === 'blocked')
   ));
-  const primary = myItems.filter(i => i.assignee === state.user.name);
-  const assist = myItems.filter(i => (i.assistants || []).includes(state.user.name) && i.assignee !== state.user.name);
+  const primaryAll = sortByPriority(myItems.filter(i => i.assignee === state.user.name));
+  const assistAll = sortByPriority(myItems.filter(i => (i.assistants || []).includes(state.user.name) && i.assignee !== state.user.name));
   const done = state.items.filter(i => i.assignee === state.user.name && i.status === 'done');
   const today = new Date().toISOString().slice(0, 10);
-  const noProgressToday = primary.filter(i => !(i.progress_updates || []).some(u => u.date === today)).length;
-  const blockedCount = primary.filter(i => i.status === 'blocked').length;
+  const noProgressItems = primaryAll.filter(i => !hasProgressToday(i, today));
+  const blockedPrimary = primaryAll.filter(i => i.status === 'blocked');
+  const blockedAssist = assistAll.filter(i => i.status === 'blocked');
+  const blockedAll = sortByPriority([...blockedPrimary, ...blockedAssist]);
+
+  const filter = state.workbenchFilter || 'all';
+  let primary = primaryAll;
+  let assist = assistAll;
+  let showPrimary = true;
+  let showAssist = true;
+
+  if (filter === 'primary') {
+    assist = [];
+    showAssist = false;
+  } else if (filter === 'assist') {
+    primary = [];
+    showPrimary = false;
+  } else if (filter === 'no_progress') {
+    primary = noProgressItems;
+    assist = [];
+    showAssist = false;
+  } else if (filter === 'blocked') {
+    primary = blockedPrimary;
+    assist = blockedAssist;
+    showPrimary = blockedPrimary.length > 0;
+    showAssist = blockedAssist.length > 0;
+  }
+
+  const visibleCount = primary.length + assist.length;
 
   const renderWorkCard = (i, role) => {
     const latest = (i.progress_updates || [])[0];
@@ -970,6 +1523,7 @@ function renderMyWork() {
         <div>
           ${i.req_no ? `<span class="req-no-tag">${esc(i.req_no)}</span>` : ''}
           <span class="type-badge ${roleCls}">${roleLabel}</span>
+          ${priorityControlHtml(i, { editable: role === 'primary' && i.assignee === state.user?.name })}
           <strong>${esc(i.title)}</strong>
           <span class="project-status-pill ${projectStatusMeta(i).cls}" style="margin-left:0.35rem">${projectStatusMeta(i).label}</span>
         </div>
@@ -988,15 +1542,17 @@ function renderMyWork() {
 
   return `
     <div class="work-summary-bar card">
-      <span>待办 <strong>${primary.length}</strong></span>
-      <span>协助 <strong>${assist.length}</strong></span>
-      <span class="${noProgressToday ? 'work-summary-warn' : ''}">今日未报进展 <strong>${noProgressToday}</strong></span>
-      ${blockedCount ? `<span class="work-summary-danger">阻塞 <strong>${blockedCount}</strong></span>` : ''}
-      <button type="button" class="btn btn-ghost btn-sm" onclick="navigate('submit')">📤 提交需求</button>
+      ${renderWorkbenchSummaryChip('primary', '待办', primaryAll.length)}
+      ${renderWorkbenchSummaryChip('assist', '协助', assistAll.length)}
+      ${renderWorkbenchSummaryChip('no_progress', '今日未报进展', noProgressItems.length, noProgressItems.length ? 'warn' : '')}
+      ${renderWorkbenchSummaryChip('blocked', '阻塞', blockedAll.length, blockedAll.length ? 'danger' : '')}
+      <button type="button" class="btn btn-ghost btn-sm work-summary-action" onclick="navigate('submit')">📤 提交需求</button>
     </div>
-    <div class="section-title">我负责的任务 (${primary.length})</div>
-    ${primary.length ? primary.map(i => renderWorkCard(i, 'primary')).join('') : '<div class="empty-state">暂无主执行任务，可在「提交需求」创建</div>'}
-    ${assist.length ? `<div class="section-title" style="margin-top:1.25rem">我协助的任务 (${assist.length})</div>${assist.map(i => renderWorkCard(i, 'assist')).join('')}` : ''}
+    ${filter !== 'all' ? `<div class="work-filter-hint">当前筛选：<strong>${workbenchFilterLabel(filter)}</strong>（${visibleCount} 项）· <button type="button" class="btn btn-ghost btn-sm" onclick="setWorkbenchFilter('all')">清除筛选</button></div>` : ''}
+    ${showPrimary ? `<div class="section-title">${filter === 'blocked' ? '我负责的阻塞任务' : filter === 'no_progress' ? '今日未报进展的任务' : '我负责的任务'} (${primary.length})${filter === 'all' ? ' · 按 P1→P3 排序' : ''}</div>
+    ${primary.length ? primary.map(i => renderWorkCard(i, 'primary')).join('') : `<div class="empty-state">${filter === 'no_progress' ? '今日进展已全部提交 🎉' : filter === 'blocked' ? '暂无阻塞的主执行任务' : '暂无主执行任务，可在「提交需求」创建'}</div>`}` : ''}
+    ${showAssist && assist.length ? `<div class="section-title" style="margin-top:1.25rem">${filter === 'blocked' ? '我协助的阻塞任务' : '我协助的任务'} (${assist.length})</div>${assist.map(i => renderWorkCard(i, 'assist')).join('')}` : ''}
+    ${filter !== 'all' && !visibleCount ? '<div class="empty-state">当前筛选下暂无任务</div>' : ''}
     <div class="work-done-hint">已完成 ${done.length} 项 · <button type="button" class="btn btn-ghost btn-sm" onclick="navigate('profile')">在我的记录中查看</button></div>`;
 }
 
@@ -1133,10 +1689,10 @@ function renderReview() {
           <button class="btn btn-primary btn-sm" onclick="showReassignModal('${i.id}')">🔄 二次分配</button>
         ` : ''}
         ${mode === 'completed' && isLeaderUser() ? `
-          <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:var(--warning,#f59e0b);color:var(--warning,#f59e0b)">↩ 退回执行中</button>
+          <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:${STAR_GOLD};color:#6b5410">↩ 退回执行中</button>
         ` : ''}
         ${mode === 'terminated' && isLeaderUser() ? `
-          <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:var(--warning,#f59e0b);color:var(--warning,#f59e0b)">↩ 退回执行中</button>
+          <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:${STAR_GOLD};color:#6b5410">↩ 退回执行中</button>
         ` : ''}
       </div>
     </div>`;
@@ -1173,6 +1729,7 @@ function renderProfileProjectRow(pr) {
     <td>${pr.task_no !== '-' ? `<span class="req-no-tag">${esc(pr.task_no)}</span>` : '<span class="flow-list-empty">-</span>'}</td>
     <td class="flow-list-title"><strong>${esc(pr.task_name)}</strong></td>
     <td><span class="project-status-pill ${meta.cls}">${meta.label}</span></td>
+    <td>${priorityBadgeHtml({ priority: pr.priority }, { compact: true })}</td>
     <td>${esc(pr.proposer)}</td>
     <td>${esc(pr.reviewer)}</td>
     <td>${esc(pr.assignee)}</td>
@@ -1189,7 +1746,8 @@ function renderProfileProjectRow(pr) {
 function renderProfileProjectTable(projects, { title, exportKind, emptyText, limit }) {
   const total = projects.length;
   const showAll = state.profileShowAll || !limit;
-  const rows = showAll ? projects : projects.slice(0, limit || total);
+  const sorted = sortByPriority(projects);
+  const rows = showAll ? sorted : sorted.slice(0, limit || total);
   const count = rows.length;
   return `<div class="card profile-task-card">
     <div class="profile-task-head">
@@ -1202,12 +1760,12 @@ function renderProfileProjectTable(projects, { title, exportKind, emptyText, lim
     <div class="project-table-wrap">
       <table class="project-table profile-task-table">
         <thead><tr>
-          <th>任务编号</th><th>任务名称</th><th>状态</th>
+          <th>任务编号</th><th>任务名称</th><th>状态</th><th>优先级</th>
           <th>需求提出人</th><th>审核人</th><th>主执行人</th><th>其他执行人</th>
           <th>开始时间</th><th>结束时间</th><th>操作</th>
         </tr></thead>
         <tbody>
-          ${count ? rows.map(renderProfileProjectRow).join('') : `<tr><td colspan="10" class="profile-task-empty">${emptyText}</td></tr>`}
+          ${count ? rows.map(renderProfileProjectRow).join('') : `<tr><td colspan="11" class="profile-task-empty">${emptyText}</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1221,6 +1779,7 @@ function profileTaskExportRow(pr) {
     pr.task_no === '-' ? '' : pr.task_no,
     pr.task_name || '',
     meta.label,
+    priorityMeta(pr.priority).label,
     pr.proposer || '',
     pr.reviewer || '',
     pr.assignee || '',
@@ -1236,7 +1795,7 @@ function exportProfileTaskList(kind) {
     toast('暂无数据可导出', 'error');
     return;
   }
-  const headers = ['任务编号', '任务名称', '状态', '需求提出人', '审核人', '主执行人', '其他执行人', '开始时间', '结束时间'];
+  const headers = ['任务编号', '任务名称', '状态', '优先级', '需求提出人', '审核人', '主执行人', '其他执行人', '开始时间', '结束时间'];
   const csv = '\uFEFF' + [headers, ...rows.map(profileTaskExportRow)]
     .map(row => row.map(csvCell).join(','))
     .join('\r\n');
@@ -1260,6 +1819,7 @@ function buildTaskDetailText(item) {
     `任务编号: ${item.req_no || '-'}`,
     `任务名称: ${item.title || '-'}`,
     `状态: ${meta.label}`,
+    `优先级: ${priorityMeta(item.priority).label}`,
     `开始时间: ${fmtExportTime(item.created_at) || '-'}`,
     `结束时间: ${end ? fmtExportTime(end) : '-'}`,
     `需求提出人: ${item.created_by || '-'}`,
@@ -1318,10 +1878,12 @@ function showTaskDetailView(id) {
     <div class="task-detail-view">
       <div class="task-detail-meta">
         ${item.req_no ? `<span class="req-no-tag">${esc(item.req_no)}</span>` : ''}
+        ${priorityBadgeHtml(item)}
         <span class="project-status-pill ${meta.cls}">${meta.label}</span>
         <span class="type-badge type-${item.type}">${TYPE_LABELS[item.type]}</span>
       </div>
       <div class="task-detail-people">${taskPeopleHtml(item)}</div>
+      ${canEditTaskPriority(item) ? `<div class="task-detail-priority-edit"><label>优先级</label>${priorityControlHtml(item, { editable: true })}</div>` : ''}
       <div class="task-detail-dates">
         <span>开始：${fmtTime(item.created_at) || '-'}</span>
         <span>结束：${end ? fmtTime(end) : '-'}</span>
@@ -1710,7 +2272,7 @@ async function leaderAction(actionFn, successMsg) {
   try {
     await actionFn();
     toast(successMsg);
-    await navigate(state.currentView || boardView());
+    await reloadViewAfterMutation();
   } catch (e) {
     toast(e.message || '操作失败', 'error');
   }
@@ -1722,7 +2284,7 @@ async function moveItem(id, newCategory) {
     return;
   }
   const col = FLOW_COLS.find(c => c.id === newCategory);
-  const count = state.items.filter(i => flowCategory(i) === newCategory && i.id !== id).length;
+  const count = kanbanBaseItems().filter(i => flowCategory(i) === newCategory && i.id !== id).length;
   if (count >= WIP_LIMITS[newCategory]) {
     toast(`${col.label} 列已达 WIP 上限 (${WIP_LIMITS[newCategory]})`, 'error');
     return;
@@ -1730,7 +2292,7 @@ async function moveItem(id, newCategory) {
   try {
     await api(`/items/${id}`, { method: 'PATCH', body: flowStatusBody(newCategory) });
     toast(`已移至「${col.label}」`);
-    await navigate(state.currentView || boardView());
+    await reloadViewAfterMutation();
   } catch (e) {
     toast(e.message || '移动失败', 'error');
   }
@@ -1865,7 +2427,7 @@ async function createItem() {
   await api('/items', { method: 'POST', body: data });
   closeModal();
   toast('创建成功');
-  await navigate(state.currentView);
+  await reloadViewAfterMutation();
 }
 
 function showItemDetail(id) {
@@ -1878,6 +2440,7 @@ function showItemDetail(id) {
   showModal(item.title, `
     <div style="margin-bottom:0.75rem">
       ${item.req_no ? `<span class="req-no-tag">${esc(item.req_no)}</span> ` : ''}
+      ${priorityBadgeHtml(item, { compact: true })}
       <span class="type-badge type-${item.type}">${TYPE_LABELS[item.type]}</span>
       <span style="color:var(--muted)">${STATUS_LABELS[item.status]}</span>
       ${myWorkRole(item) === 'primary' ? '<span class="type-badge type-story" style="margin-left:0.35rem">我的主执行</span>' : ''}
@@ -1888,6 +2451,7 @@ function showItemDetail(id) {
     ${item.blocked_reason ? `<p style="color:var(--danger);font-size:0.85rem;margin-bottom:0.5rem">${BLOCKER_ICONS[item.blocker_type] || '🚧'} ${esc(item.blocked_reason)}</p>` : ''}
     ${renderTaskProgressTimeline(updates)}
     <div class="section-title" style="font-size:0.85rem;margin-top:0.5rem">任务编辑</div>
+    ${canEditTaskPriority(item) ? `<div class="form-group"><label>优先级</label>${priorityControlHtml(item, { editable: true })}</div>` : ''}
     <div class="form-group"><label>状态</label><select id="eStatus">${FLOW_COLS.map(c => `<option value="${c.id}" ${flowCategory(item) === c.id ? 'selected' : ''}>${c.label}</option>`).join('')}</select></div>
     <div class="form-group"><label>负责人</label><input id="eAssignee" value="${esc(item.assignee || '')}"></div>
     <div class="form-group"><label>Story Points</label><input id="ePts" type="number" value="${item.story_points || 0}"></div>
@@ -1909,7 +2473,7 @@ function showItemDetail(id) {
       <button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="showReassignModal('${id}')">🔄 二次分配</button>
     ` : ''}
     ${isLeaderUser() && (item.status === 'done' || item.status === 'terminated') ? `
-      <button class="btn btn-ghost" style="width:100%;margin-bottom:0.5rem;border-color:var(--warning,#f59e0b);color:var(--warning,#f59e0b)" onclick="reviewerRevoke('${id}')">↩ 退回执行中</button>
+      <button class="btn btn-ghost" style="width:100%;margin-bottom:0.5rem;border-color:${STAR_GOLD};color:#6b5410" onclick="reviewerRevoke('${id}')">↩ 退回执行中</button>
     ` : ''}
     ${isAdmin ? `<button class="btn btn-danger" style="width:100%" onclick="deleteItem('${id}')">🗑️ 删除任务（超级管理员）</button>` : ''}
   `);
@@ -1937,10 +2501,12 @@ async function updateItem(id) {
     return;
   }
   const category = document.getElementById('eStatus').value;
+  const priorityEl = document.querySelector('#modalOverlay .priority-select');
   const body = flowStatusBody(category, {
     assignee: document.getElementById('eAssignee').value,
     story_points: Number(document.getElementById('ePts').value),
     acceptance_criteria: document.getElementById('eCriteria').value,
+    ...(priorityEl ? { priority: normalizePriority(priorityEl.value) } : {}),
   });
   const blocked = document.getElementById('eBlocked');
   if (blocked) body.blocked_reason = blocked.value;
@@ -1948,7 +2514,7 @@ async function updateItem(id) {
     await api(`/items/${id}`, { method: 'PATCH', body });
     closeModal();
     toast('已更新');
-    await navigate(state.currentView);
+    await reloadViewAfterMutation();
   } catch (e) {
     toast(e.message || '更新失败', 'error');
   }
@@ -1995,15 +2561,16 @@ async function runStandup() {
   const result = await api('/ai/standup', { method: 'POST' });
   showModal('AI 站会摘要', `<div class="ai-result" style="display:block;max-height:60vh">${esc(result.content)}</div>`);
   await loadData();
+  if (state.currentView === 'dashboard') await refreshGlobalKanban(true);
 }
 
 async function runRisks() {
   toast('AI 扫描风险...');
   const result = await api('/ai/risks', { method: 'POST' });
-  const level = result.count > 0 ? 'warning' : 'success';
   showModal(`风险扫描 (${result.count} 项)`, `<div class="ai-result" style="display:block;max-height:60vh">${esc(result.content)}</div>`);
   toast(result.count ? `发现 ${result.count} 个风险` : '无显著风险', result.count ? 'error' : 'success');
   await loadData();
+  if (state.currentView === 'dashboard') await refreshGlobalKanban(true);
 }
 
 async function runReviewReport() {
@@ -2228,7 +2795,7 @@ async function completeTask(id) {
   if (!confirm('确认标记任务完成？完成后将自动归档并通知审核人。')) return;
   await api(`/items/${id}/complete`, { method: 'POST' });
   toast('任务已完成，已自动归档 ✅');
-  await navigate(state.currentView);
+  await reloadViewAfterMutation();
 }
 
 async function reviewerReject(id) {
@@ -2263,7 +2830,7 @@ async function confirmComplete(id) {
   if (!confirm('确认该任务已完成？')) return;
   await api(`/items/${id}/confirm-complete`, { method: 'POST' });
   toast('已确认完成 ✅');
-  await navigate(state.currentView);
+  await reloadViewAfterMutation();
 }
 
 async function reviewItem(id, action) {
@@ -2307,6 +2874,25 @@ async function smartAssign(id) {
   toast(`推荐: ${result.primary} + ${(result.assistants||[]).length} 协助`);
 }
 
+async function updateTaskPriority(id, priority) {
+  const p = normalizePriority(priority);
+  try {
+    const updated = await api(`/items/${id}/priority`, { method: 'PATCH', body: { priority: p } });
+    syncItemInState(updated);
+    toast(`优先级已设为 ${priorityMeta(p).label}`);
+    const modalOpen = document.getElementById('modalOverlay')?.classList.contains('show');
+    if (modalOpen) {
+      if (isReviewerUser()) showItemDetail(id);
+      else showTaskDetailView(id);
+      return;
+    }
+    await reloadViewAfterMutation();
+  } catch (e) {
+    toast(e.message || '优先级更新失败', 'error');
+    await reloadViewAfterMutation();
+  }
+}
+
 async function submitProgress(id, fromModal = false) {
   const description = fromModal
     ? document.getElementById('modalProgDesc')?.value
@@ -2320,10 +2906,17 @@ async function submitProgress(id, fromModal = false) {
   if (!description?.trim() && (!blocker_type || blocker_type === 'none')) {
     return toast('请填写进展描述或选择卡点类型', 'error');
   }
-  await api(`/items/${id}/progress`, { method: 'POST', body: { description, blocker_type, blocker_desc } });
+  const result = await api(`/items/${id}/progress`, { method: 'POST', body: { description, blocker_type, blocker_desc } });
+  if (result?.item) syncItemInState(result.item);
+  if (result?.activity) prependActivityInState(result.activity);
   toast(blocker_type && blocker_type !== 'none' ? '进展已提交，任务已标记为阻塞' : '今日进展已提交');
   if (fromModal) closeModal();
-  await navigate(state.currentView);
+  if (state.currentView === 'dashboard' && isReviewerUser()) {
+    refreshActivityFeedDom();
+    updateDashboardLivePanels();
+    return;
+  }
+  await reloadViewAfterMutation();
 }
 
 async function deleteItem(id) {
@@ -2331,7 +2924,7 @@ async function deleteItem(id) {
   await api(`/items/${id}`, { method: 'DELETE' });
   closeModal();
   toast('任务已删除');
-  await navigate(state.currentView);
+  await reloadViewAfterMutation();
 }
 
 async function viewProfile(userId) {
@@ -2365,6 +2958,11 @@ async function initApp() {
     buildTopbar();
     const defaultView = state.user?.defaultView || state.roleConfig?.defaultView || state.roleConfig?.nav?.[0]?.id || 'mywork';
     await navigate(defaultView);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && state.currentView === 'dashboard' && isReviewerUser()) {
+        refreshGlobalKanban(true);
+      }
+    });
   } catch { localStorage.clear(); location.href = '/login.html'; }
 }
 

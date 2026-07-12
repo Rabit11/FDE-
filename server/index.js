@@ -323,6 +323,25 @@ app.patch('/api/items/:id', (req, res) => {
   res.json(item);
 });
 
+app.patch('/api/items/:id/priority', (req, res) => {
+  const item = queries.getItem(req.params.id);
+  if (!item) return res.status(404).json({ error: '任务不存在' });
+  const isAssignee = item.assignee === req.user.name;
+  const isAssistant = (item.assistants || []).includes(req.user.name);
+  const isReviewer = (req.user.capabilities || []).includes('reviewer') || req.user.role === 'admin';
+  if (!isAssignee && !isAssistant && !isReviewer) {
+    return res.status(403).json({ error: '无权修改此任务优先级' });
+  }
+  const priority = Number(req.body.priority);
+  if (![1, 2, 3].includes(priority)) {
+    return res.status(400).json({ error: '优先级须为 P1(1)、P2(2) 或 P3(3)' });
+  }
+  const updated = queries.updateItem(req.params.id, { priority, actor: req.user.name });
+  const labels = { 1: 'P1 紧急', 2: 'P2 高', 3: 'P3 普通' };
+  queries.logActivity(req.params.id, 'priority_changed', `优先级调整为 ${labels[priority]}`, req.user.name);
+  res.json(updated);
+});
+
 app.delete('/api/items/:id', (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: '仅超级管理员可删除任务' });

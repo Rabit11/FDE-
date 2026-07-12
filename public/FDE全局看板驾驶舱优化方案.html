@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FDE管理平台 · 全局看板驾驶舱优化方案</title>
+<style>
+:root {
+  --bg: #f0f4fa; --surface: #fff; --surface2: #f8fbff;
+  --border: #d8e3f0; --text: #153e75; --muted: #5a7291;
+  --accent: #2563eb; --accent-light: #eaf2ff;
+  --success: #16a34a; --warning: #d97706; --danger: #dc2626;
+  --star-gold: #f4d03f; --star-blue: #1e3a5f;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); line-height: 1.75; font-size: 15px; }
+.hero {
+  background: linear-gradient(135deg, #0c1929 0%, #1e3a5f 40%, #2563eb 100%);
+  padding: 2.5rem 2rem; color: #fff;
+}
+.hero h1 { font-size: 2rem; margin-bottom: 0.4rem; }
+.hero p { opacity: 0.95; max-width: 720px; }
+.hero .meta { opacity: 0.92; font-size: 0.88rem; margin-top: 0.75rem; }
+.hero .meta span { margin-right: 1.5rem; }
+.hero .meta a { color: #bfdbfe; }
+.layout { display: flex; max-width: 1380px; margin: 0 auto; }
+nav.toc {
+  width: 260px; flex-shrink: 0; padding: 1.5rem 1rem 2rem;
+  position: sticky; top: 0; align-self: flex-start; max-height: 100vh; overflow-y: auto;
+  background: var(--surface); border-right: 1px solid var(--border);
+}
+nav.toc a { display: block; padding: 0.35rem 0.6rem; font-size: 0.82rem; color: var(--muted); text-decoration: none; border-radius: 6px; }
+nav.toc a:hover { background: var(--accent-light); color: var(--accent); }
+nav.toc .toc-title { font-size: 0.72rem; font-weight: 700; color: var(--muted); margin: 1rem 0 0.35rem 0.6rem; }
+main { flex: 1; padding: 1.5rem 2rem 3rem; min-width: 0; }
+h2 { font-size: 1.35rem; margin: 2rem 0 0.85rem; padding-bottom: 0.45rem; border-bottom: 2px solid var(--border); color: #0f2e5b; }
+h2:first-child { margin-top: 0; }
+h3 { font-size: 1.05rem; margin: 1.1rem 0 0.6rem; color: var(--accent); }
+h4 { font-size: 0.92rem; margin: 0.85rem 0 0.4rem; color: #1e40af; }
+p, li { color: #334155; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.25rem; margin-bottom: 0.85rem; box-shadow: 0 2px 8px rgba(15,46,91,0.04); }
+.card--ok { border-left: 4px solid var(--success); }
+.card--warn { border-left: 4px solid var(--warning); }
+.card--danger { border-left: 4px solid var(--danger); }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.85rem; }
+@media (max-width: 960px) { .layout { flex-direction: column; } nav.toc { width: 100%; position: static; max-height: none; } .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+table { width: 100%; border-collapse: collapse; font-size: 0.84rem; margin: 0.75rem 0; }
+th, td { padding: 0.55rem 0.75rem; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { background: var(--accent-light); color: #1e3a8a; font-weight: 700; }
+tr:nth-child(even) td { background: var(--surface2); }
+.tag { display: inline-block; padding: 0.12rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; margin: 0.1rem; }
+.tag-blue { background: #dbeafe; color: #1d4ed8; }
+.tag-green { background: #dcfce7; color: #15803d; }
+.tag-red { background: #fee2e2; color: #b91c1c; }
+.tag-yellow { background: #fef3c7; color: #b45309; }
+.tag-gray { background: #f1f5f9; color: #64748b; }
+.tag-purple { background: #ede9fe; color: #6d28d9; }
+.verdict { background: linear-gradient(135deg, #eff6ff, #f0fdf4); border: 1px solid #bfdbfe; border-radius: 10px; padding: 1.1rem 1.25rem; margin: 0.75rem 0; }
+.code { font-family: Consolas, monospace; font-size: 0.8rem; background: #f1f5f9; padding: 0.1rem 0.35rem; border-radius: 4px; color: #0f172a; }
+ul, ol { padding-left: 1.25rem; } li { margin-bottom: 0.3rem; }
+.footer { text-align: center; padding: 1.5rem; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--border); margin-top: 2rem; }
+.compare-old { color: #94a3b8; text-decoration: line-through; }
+.compare-new { color: #15803d; font-weight: 600; }
+.diagram { background: #0f172a; color: #cbd5e1; padding: 1rem; border-radius: 8px; font-family: Consolas, monospace; font-size: 0.76rem; line-height: 1.6; overflow-x: auto; white-space: pre; margin: 0.75rem 0; }
+
+/* ── 预览切换 ── */
+.preview-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.preview-tab {
+  padding: 0.45rem 1rem; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); font-size: 0.82rem; font-weight: 600; cursor: pointer; color: var(--muted);
+}
+.preview-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.preview-panel { display: none; }
+.preview-panel.active { display: block; }
+
+/* ── 驾驶舱 Mock（v4 新方案）── */
+.cockpit-mock {
+  background: var(--surface); border: 2px solid #93c5fd; border-radius: 14px;
+  overflow: hidden; box-shadow: 0 12px 40px rgba(37,99,235,0.12);
+  font-size: 0.78rem;
+}
+.cockpit-mock--old { border-color: #cbd5e1; box-shadow: 0 4px 16px rgba(15,46,91,0.06); opacity: 0.92; }
+.cm-toolbar {
+  display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap;
+  padding: 0.65rem 1rem; background: linear-gradient(135deg, #f8fbff, #eff6ff);
+  border-bottom: 1px solid var(--border);
+}
+.cm-health {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.75rem;
+  background: #fff; border: 1px solid #bbf7d0; border-radius: 999px; font-weight: 700;
+}
+.cm-health-dot { width: 10px; height: 10px; border-radius: 50%; background: #22c55e; }
+.cm-health.warn .cm-health-dot { background: #f59e0b; }
+.cm-health.danger .cm-health-dot { background: #ef4444; }
+.cm-meta { color: var(--muted); flex: 1; font-size: 0.72rem; }
+.cm-btn { padding: 0.3rem 0.65rem; border: 1px solid var(--border); border-radius: 6px; background: #fff; font-size: 0.72rem; cursor: default; }
+.cm-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.cm-flow-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.55rem; padding: 0.75rem 1rem 0.5rem; }
+.cm-stat {
+  padding: 0.65rem 0.75rem; border: 1px solid var(--border); border-radius: 10px;
+  background: #fff; position: relative; overflow: hidden; cursor: default;
+}
+.cm-stat::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+.cm-stat.s-run::before { background: #f59e0b; }
+.cm-stat.s-block::before { background: #ef4444; }
+.cm-stat.s-done::before { background: #22c55e; }
+.cm-stat.s-term::before { background: #94a3b8; }
+.cm-stat.rag-red { border-color: #fecaca; box-shadow: 0 0 0 1px #fee2e2; }
+.cm-stat.rag-yellow { border-color: #fde68a; }
+.cm-stat-lbl { font-size: 0.68rem; color: var(--muted); font-weight: 600; }
+.cm-stat-val { font-size: 1.65rem; font-weight: 850; line-height: 1.1; margin: 0.15rem 0; }
+.cm-stat.s-run .cm-stat-val { color: #f59e0b; }
+.cm-stat.s-block .cm-stat-val { color: #ef4444; }
+.cm-stat.s-done .cm-stat-val { color: #22c55e; }
+.cm-stat-sub { font-size: 0.65rem; color: var(--muted); }
+.cm-spark { height: 18px; margin-top: 0.35rem; display: flex; align-items: flex-end; gap: 2px; }
+.cm-spark span { flex: 1; background: #dbeafe; border-radius: 2px 2px 0 0; min-height: 4px; }
+.cm-spark span:nth-child(5) { height: 14px; background: #93c5fd; }
+.cm-spark span:nth-child(7) { height: 18px; background: #2563eb; }
+
+.cm-kpi-row { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0 1rem 0.75rem; }
+.cm-kpi { padding: 0.35rem 0.7rem; border: 1px solid var(--border); border-radius: 999px; background: #fff; font-size: 0.72rem; }
+.cm-kpi strong { color: var(--accent); }
+.cm-kpi.alert { border-color: #fecaca; background: #fff5f5; }
+.cm-kpi.alert strong { color: var(--danger); }
+.cm-trend-up { color: #16a34a; font-size: 0.65rem; }
+
+.cm-l2 { display: grid; grid-template-columns: 1fr 1.1fr; gap: 0.65rem; padding: 0 1rem 0.75rem; }
+.cm-panel { border: 1px solid var(--border); border-radius: 10px; padding: 0.75rem; background: #fafcff; }
+.cm-panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+.cm-panel-title { font-weight: 700; font-size: 0.82rem; }
+.cm-panel-sub { font-size: 0.68rem; color: var(--muted); }
+
+.cm-action-item {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border); border-radius: 8px; background: #fff; margin-bottom: 0.35rem;
+}
+.cm-action-item:last-child { margin-bottom: 0; }
+.cm-action-item.urgent { border-color: #fecaca; background: #fffafa; }
+.cm-req { font-size: 0.65rem; padding: 0.1rem 0.35rem; background: #dbeafe; color: #1d4ed8; border-radius: 4px; font-weight: 700; }
+.cm-p1 { font-size: 0.65rem; padding: 0.1rem 0.35rem; background: #fee2e2; color: #b91c1c; border-radius: 4px; font-weight: 700; }
+.cm-action-title { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-action-meta { font-size: 0.68rem; color: var(--muted); }
+
+.cm-trend-chart {
+  height: 100px; background: linear-gradient(180deg, #eff6ff 0%, #fff 100%);
+  border-radius: 8px; border: 1px solid var(--border); position: relative; overflow: hidden;
+}
+.cm-trend-area {
+  position: absolute; bottom: 0; left: 0; right: 0; height: 70%;
+  background: linear-gradient(180deg, rgba(245,158,11,0.25), rgba(37,99,235,0.08));
+  clip-path: polygon(0 80%, 15% 60%, 30% 65%, 45% 40%, 60% 50%, 75% 25%, 90% 35%, 100% 20%, 100% 100%, 0 100%);
+}
+.cm-trend-legend { display: flex; gap: 0.75rem; margin-top: 0.4rem; font-size: 0.65rem; color: var(--muted); }
+.cm-trend-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 0.2rem; vertical-align: middle; }
+
+.cm-l3 { display: grid; grid-template-columns: 1fr 1.2fr; gap: 0.65rem; padding: 0 1rem 0.75rem; }
+.cm-person { display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0; border-bottom: 1px solid #eef2f7; font-size: 0.72rem; }
+.cm-person:last-child { border-bottom: none; }
+.cm-person-name { width: 3.5rem; font-weight: 600; }
+.cm-bar-wrap { flex: 1; height: 7px; background: #e2e8f0; border-radius: 4px; overflow: hidden; }
+.cm-bar { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #3b82f6, #06b6d4); }
+.cm-chips { display: flex; gap: 0.25rem; }
+.cm-chip { font-size: 0.6rem; padding: 0.08rem 0.3rem; border-radius: 4px; background: #e0e7ff; color: #3730a3; }
+.cm-chip.danger { background: #fee2e2; color: #b91c1c; }
+
+.cm-tabs { display: flex; gap: 0.35rem; margin-bottom: 0.5rem; }
+.cm-tab { padding: 0.25rem 0.6rem; border-radius: 6px; font-size: 0.68rem; border: 1px solid var(--border); background: #fff; }
+.cm-tab.on { background: var(--accent-light); border-color: #93c5fd; color: var(--accent); font-weight: 700; }
+.cm-mini-board { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.35rem; }
+.cm-mini-col { border: 1px solid var(--border); border-radius: 8px; background: #fff; overflow: hidden; }
+.cm-mini-head { padding: 0.3rem 0.45rem; font-size: 0.65rem; font-weight: 700; border-top: 2px solid; display: flex; justify-content: space-between; }
+.cm-mini-card { margin: 0.3rem; padding: 0.35rem; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 0.62rem; }
+
+.cm-footer { padding: 0.65rem 1rem; border-top: 1px solid var(--border); background: #f8fafc; }
+.cm-insight { padding: 0.55rem 0.75rem; border-left: 3px solid #f59e0b; background: #fffbeb; border-radius: 0 8px 8px 0; margin-bottom: 0.5rem; font-size: 0.75rem; }
+.cm-feed { font-size: 0.7rem; color: var(--muted); }
+.cm-feed div { padding: 0.2rem 0; border-bottom: 1px dashed #e2e8f0; }
+
+/* 旧版 mock 简化 */
+.cm-old-stack .cm-panel { margin: 0.5rem 1rem; }
+.cm-old-gantt { height: 60px; background: repeating-linear-gradient(90deg, #e2e8f0 0, #e2e8f0 1px, transparent 1px, transparent 40px); margin: 0.5rem 0; border-radius: 6px; }
+.cm-old-dup { background: #fef3c7; border: 1px dashed #f59e0b; padding: 0.35rem 0.6rem; border-radius: 6px; font-size: 0.68rem; color: #b45309; margin: 0.35rem 0; }
+
+@media (max-width: 900px) {
+  .cm-flow-cards, .cm-mini-board { grid-template-columns: repeat(2, 1fr); }
+  .cm-l2, .cm-l3 { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>📊 FDE管理平台 · 全局看板驾驶舱优化方案</h1>
+  <p>领导默认首页的「10 秒决策驾驶舱」— 倒金字塔布局、RAG 态势、行动队列、与任务中心/工作台闭环</p>
+  <div class="meta">
+    <span>📍 <strong>http://localhost:3456</strong></span>
+    <span>📄 <strong>/FDE全局看板驾驶舱优化方案.html</strong></span>
+    <span>📅 2026-07-12</span>
+    <span>📦 方案 v4.0</span>
+    <span>✅ 已落地实现</span>
+    <span>🎨 <a href="/FDE配色方案预览.html">星空主题</a></span>
+  </div>
+</header>
+
+<div class="layout">
+<nav class="toc">
+  <div class="toc-title">目录</div>
+  <a href="#s1">1. 背景与目标</a>
+  <a href="#s2">2. 现状诊断</a>
+  <a href="#s3">3. 设计原则</a>
+  <a href="#s4">4. 信息架构</a>
+  <a href="#preview">5. 视觉预览 ⭐</a>
+  <a href="#s6">6. 模块说明</a>
+  <a href="#s7">7. KPI 体系</a>
+  <a href="#s8">8. 交互与性能</a>
+  <a href="#s9">9. 实施分期</a>
+  <a href="#s10">10. 前后对比</a>
+  <a href="#s11">11. 代码映射</a>
+  <div class="toc-title">相关文档</div>
+  <a href="/FDE管理平台开发方案.html">↗ 开发方案</a>
+  <a href="/FDE管理平台布局优化方案.html">↗ 布局优化</a>
+  <a href="/">↗ 进入平台</a>
+</nav>
+
+<main>
+
+<h2 id="s1">1. 背景与目标</h2>
+<div class="verdict">
+  <strong>核心判断：</strong>v3.0 全局看板已具备四态指标、人员活跃、甘特、迷你看板、AI 洞察等<strong>完整能力</strong>，但模块纵向堆叠达 7 层，领导需滚动才能看完，<strong>无法在 10 秒内回答「要不要介入」</strong>。本方案在保留全部后端能力前提下，重构为「驾驶舱」信息层级。
+</div>
+<h3>优化目标（三问）</h3>
+<table>
+  <tr><th>问题</th><th>目标</th><th>时间</th></tr>
+  <tr><td>整体健康吗？</td><td>流动健康度 + 四态 RAG 指标卡</td><td>3 秒</td></tr>
+  <tr><td>哪里红了？</td><td>行动队列：阻塞 / P1 / 超期 / 无进展</td><td>5 秒</td></tr>
+  <tr><td>我今天该处理什么？</td><td>一键跳转任务中心对应筛选</td><td>10 秒</td></tr>
+</table>
+
+<h2 id="s2">2. 现状诊断（v3.0）</h2>
+<div class="diagram">当前页面结构（自上而下 7 层，需大量滚动）
+
+  ① 流程步骤条（装饰性）
+  ② 四态指标卡 ×4 + KPI 胶囊条 ×4
+  ③ 三栏：人员活跃 / 任务态势 / 实时动态
+  ④ 甘特图（全宽，占屏大）
+  ⑤ 四态迷你看板
+  ⑥ 最近动态（8 条）  ← 与 ③ 重复
+  ⑦ AI 洞察（3 条）   ← 与顶栏站会/风险扫描脱节</div>
+
+<table>
+  <thead><tr><th>问题</th><th>表现</th><th>影响</th></tr></thead>
+  <tbody>
+    <tr><td>信息过载</td><td>可见 KPI 约 12+，超 Miller 法则 7±2</td><td>扫描成本高，决策延迟</td></tr>
+    <tr><td>内容重复</td><td>「实时动态」出现 2 次</td><td>浪费首屏，降低信任</td></tr>
+    <tr><td>缺行动焦点</td><td>阻塞仅显示数字「1」</td><td>看到问题不知下一步</td></tr>
+    <tr><td>KPI 无上下文</td><td>吞吐量/Lead Time 无趋势、无目标</td><td>数字不可决策</td></tr>
+    <tr><td>模块重叠</td><td>人员活跃 vs 任务态势</td><td>认知负担重复</td></tr>
+    <tr><td>甘特过重</td><td>与迷你看板功能重叠</td><td>分析型内容挤占首屏</td></tr>
+    <tr><td>未打通 P1</td><td>v3.0 三级优先级未在驾驶舱体现</td><td>战略与执行脱节</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s3">3. 设计原则</h2>
+<div class="grid-2">
+  <div class="card card--ok">
+    <h4>倒金字塔布局</h4>
+    <p>参考 <a href="https://appdeck.com/blog/executive-dashboard-design-best-practices" target="_blank" rel="noopener">Executive Dashboard Best Practices</a>：头条 KPI → 趋势洞察 → 行动明细。</p>
+  </div>
+  <div class="card card--ok">
+    <h4>颜色只表状态</h4>
+    <p>RAG（绿/黄/红）仅用于 WIP 超限、阻塞、P1 告警；装饰性渐变减至流程条与顶栏。</p>
+  </div>
+  <div class="card card--warn">
+    <h4>渐进披露</h4>
+    <p>甘特图默认折叠，与四态快照 Tab 切换；详情点击下钻任务中心，不在首屏堆满图表。</p>
+  </div>
+  <div class="card card--ok">
+    <h4>与业务闭环</h4>
+    <p>行动队列规则与「今日工作台」筛选（待办/阻塞/今日未报进展）使用同一套数据逻辑。</p>
+  </div>
+</div>
+
+<h2 id="s4">4. 信息架构（v4.0 三层驾驶舱）</h2>
+<div class="diagram">L1 态势层（首屏必见）
+  ├─ 流动健康度 RAG 徽章 + 刷新条
+  ├─ 四态指标卡（可点击 → 任务中心筛选）
+  └─ KPI 胶囊：吞吐 / Lead Time / P1 / 今日无进展 / 超期
+
+L2 洞察层（次屏）
+  ├─ 左：需立即处理 · 行动队列（阻塞→P1→超期）
+  └─ 右：近 7 日流动趋势（堆叠面积/折线）
+
+L3 明细层（可折叠）
+  ├─ 左：人员负载（合并活跃+态势）
+  ├─ 右：四态快照 / 甘特图 [Tab]
+  └─ 底：AI 洞察横幅 + 合并动态流（去重）</div>
+
+<h2 id="preview">5. 视觉预览 ⭐</h2>
+<p>下方可切换 <strong>v4.0 新方案</strong> 与 <strong>v3.0 现状</strong> 对比。新方案基于当前真实数据样例（执行中 20、阻塞 1、WIP 超限）。</p>
+
+<div class="preview-tabs">
+  <button type="button" class="preview-tab active" onclick="switchPreview('new')">✨ v4.0 新驾驶舱（推荐）</button>
+  <button type="button" class="preview-tab" onclick="switchPreview('old')">📋 v3.0 现状</button>
+</div>
+
+<!-- v4 新方案 Mock -->
+<div id="preview-new" class="preview-panel active">
+  <div class="cockpit-mock">
+    <div class="cm-toolbar">
+      <div class="cm-health warn"><span class="cm-health-dot"></span> 流动健康 <strong>68</strong> 分</div>
+      <span class="cm-meta">🟢 动态刷新 · 更新于 23:18:05 · 数据与任务中心同步</span>
+      <span class="cm-btn">↻ 刷新</span>
+      <span class="cm-btn">站会摘要</span>
+      <span class="cm-btn">风险扫描</span>
+      <span class="cm-btn primary">+ 新建需求</span>
+    </div>
+
+    <div class="cm-flow-cards">
+      <div class="cm-stat s-run rag-red">
+        <div class="cm-stat-lbl">执行中</div>
+        <div class="cm-stat-val">20</div>
+        <div class="cm-stat-sub">WIP 20/10 🔴 超限 · 点击筛选 →</div>
+        <div class="cm-spark"><span style="height:6px"></span><span style="height:8px"></span><span style="height:10px"></span><span style="height:9px"></span><span></span><span style="height:12px"></span><span></span></div>
+      </div>
+      <div class="cm-stat s-block rag-red">
+        <div class="cm-stat-lbl">阻塞</div>
+        <div class="cm-stat-val">1</div>
+        <div class="cm-stat-sub">需立即处理 · 占比 4%</div>
+        <div class="cm-spark"><span style="height:5px"></span><span style="height:8px"></span><span style="height:6px"></span><span style="height:10px"></span><span style="height:14px;background:#fca5a5"></span><span style="height:8px"></span><span style="height:6px"></span></div>
+      </div>
+      <div class="cm-stat s-done">
+        <div class="cm-stat-lbl">已归档</div>
+        <div class="cm-stat-val">3</div>
+        <div class="cm-stat-sub">累计完成 · 占比 13%</div>
+        <div class="cm-spark"><span style="height:4px"></span><span style="height:6px"></span><span style="height:8px"></span><span style="height:12px;background:#86efac"></span><span style="height:10px"></span><span style="height:8px"></span><span style="height:6px"></span></div>
+      </div>
+      <div class="cm-stat s-term">
+        <div class="cm-stat-lbl">已终止</div>
+        <div class="cm-stat-val">0</div>
+        <div class="cm-stat-sub">领导终止 · 占比 0%</div>
+        <div class="cm-spark"><span style="height:4px"></span><span style="height:4px"></span><span style="height:4px"></span><span style="height:4px"></span><span style="height:4px"></span><span style="height:4px"></span><span style="height:4px"></span></div>
+      </div>
+    </div>
+
+    <div class="cm-kpi-row">
+      <span class="cm-kpi">近14天吞吐 <strong>3</strong> 项 <span class="cm-trend-up">↑</span></span>
+      <span class="cm-kpi">Lead Time <strong>0.3</strong> 天</span>
+      <span class="cm-kpi alert">P1 待推进 <strong>2</strong></span>
+      <span class="cm-kpi alert">今日无进展 <strong>4</strong></span>
+      <span class="cm-kpi">超期任务 <strong>1</strong></span>
+    </div>
+
+    <div class="cm-l2">
+      <div class="cm-panel">
+        <div class="cm-panel-head">
+          <span class="cm-panel-title">⚠️ 需立即处理</span>
+          <span class="cm-panel-sub">3 项 · 按紧急度排序</span>
+        </div>
+        <div class="cm-action-item urgent">
+          <span class="cm-req">REQ-0006</span><span class="cm-p1">P1</span>
+          <span class="cm-action-title">移动端需求表单适配</span>
+          <span class="cm-action-meta">阻塞 · 赵立泽</span>
+        </div>
+        <div class="cm-action-item urgent">
+          <span class="cm-req">REQ-0012</span><span class="cm-p1">P1</span>
+          <span class="cm-action-title">林宇飞让我搭建AI协同赋能的平台</span>
+          <span class="cm-action-meta">今日未报 · 赵立泽</span>
+        </div>
+        <div class="cm-action-item">
+          <span class="cm-req">REQ-0008</span>
+          <span class="cm-action-title">科研数据可视化看板</span>
+          <span class="cm-action-meta">超期 · 王诗瑶</span>
+        </div>
+        <div style="margin-top:0.45rem;display:flex;gap:0.35rem">
+          <span class="cm-btn">全部阻塞 →</span>
+          <span class="cm-btn">全部 P1 →</span>
+        </div>
+      </div>
+      <div class="cm-panel">
+        <div class="cm-panel-head">
+          <span class="cm-panel-title">📈 近 7 日流动趋势</span>
+          <span class="cm-panel-sub">执行 / 阻塞 / 归档</span>
+        </div>
+        <div class="cm-trend-chart"><div class="cm-trend-area"></div></div>
+        <div class="cm-trend-legend">
+          <span><i style="background:#f59e0b"></i>执行中</span>
+          <span><i style="background:#ef4444"></i>阻塞</span>
+          <span><i style="background:#22c55e"></i>归档</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="cm-l3">
+      <div class="cm-panel">
+        <div class="cm-panel-head">
+          <span class="cm-panel-title">👥 人员负载</span>
+          <span class="cm-panel-sub">主 / 协 / 阻</span>
+        </div>
+        <div class="cm-person"><span class="cm-person-name">赵立泽</span><div class="cm-bar-wrap"><div class="cm-bar" style="width:92%"></div></div><div class="cm-chips"><span class="cm-chip">主6</span><span class="cm-chip">协1</span><span class="cm-chip danger">阻1</span></div></div>
+        <div class="cm-person"><span class="cm-person-name">王诗瑶</span><div class="cm-bar-wrap"><div class="cm-bar" style="width:65%"></div></div><div class="cm-chips"><span class="cm-chip">主4</span><span class="cm-chip">协2</span></div></div>
+        <div class="cm-person"><span class="cm-person-name">杨会冉</span><div class="cm-bar-wrap"><div class="cm-bar" style="width:48%"></div></div><div class="cm-chips"><span class="cm-chip">主3</span></div></div>
+      </div>
+      <div class="cm-panel">
+        <div class="cm-tabs">
+          <span class="cm-tab on">📋 四态快照</span>
+          <span class="cm-tab">📅 甘特图</span>
+        </div>
+        <div class="cm-mini-board">
+          <div class="cm-mini-col"><div class="cm-mini-head" style="border-color:#f59e0b"><span>执行中</span><span>20</span></div><div class="cm-mini-card">REQ-0012 · P1<br>赵立泽</div><div class="cm-mini-card">REQ-0003<br>王诗瑶</div></div>
+          <div class="cm-mini-col"><div class="cm-mini-head" style="border-color:#ef4444"><span>阻塞</span><span>1</span></div><div class="cm-mini-card">REQ-0006 · P1<br>赵立泽</div></div>
+          <div class="cm-mini-col"><div class="cm-mini-head" style="border-color:#22c55e"><span>已归档</span><span>3</span></div><div class="cm-mini-card">REQ-0001<br>万贤书</div></div>
+          <div class="cm-mini-col"><div class="cm-mini-head" style="border-color:#94a3b8"><span>已终止</span><span>0</span></div><div class="cm-mini-card" style="color:#94a3b8">暂无</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cm-footer">
+      <div class="cm-insight"><strong>🧠 AI 风险洞察</strong> · WIP 超限 + 1 项阻塞：建议 24h 内对 REQ-0006 二次分配或升级处理。<button class="cm-btn" style="margin-left:0.5rem">查看建议</button></div>
+      <div class="cm-feed">
+        <div>📤 杨会冉 提交进展 · FDE平台智能审核 · 2 分钟前</div>
+        <div>🔄 曾锐 终止执行 · REQ-0004 · 15 分钟前</div>
+        <div>🚀 系统自动派发 · REQ-0012 → 赵立泽 · 1 小时前</div>
+      </div>
+    </div>
+  </div>
+  <p style="font-size:0.82rem;color:var(--muted);margin-top:0.65rem">↑ 交互原型：指标卡、行动项、人员行均可点击跳转任务中心对应筛选（实现时复用 <code class="code">goTaskCenter()</code>）。</p>
+</div>
+
+<!-- v3 现状 Mock -->
+<div id="preview-old" class="preview-panel">
+  <div class="cockpit-mock cockpit-mock--old">
+    <div class="cm-toolbar" style="background:#f8fafc">
+      <span class="cm-meta">🟢 动态刷新 · 更新于 23:18:05</span>
+      <span class="cm-btn">↻ 立即刷新</span>
+    </div>
+    <div style="padding:0.5rem 1rem;font-size:0.72rem;color:var(--muted)">流程条 → 四态卡 → KPI条 → 三栏 → 甘特 → 迷你看板 → 动态+洞察</div>
+    <div class="cm-flow-cards">
+      <div class="cm-stat s-run"><div class="cm-stat-lbl">执行中</div><div class="cm-stat-val">20</div><div class="cm-stat-sub">WIP 20/10</div></div>
+      <div class="cm-stat s-block"><div class="cm-stat-lbl">阻塞</div><div class="cm-stat-val">1</div><div class="cm-stat-sub">需立即处理</div></div>
+      <div class="cm-stat s-done"><div class="cm-stat-lbl">已归档</div><div class="cm-stat-val">3</div></div>
+      <div class="cm-stat s-term"><div class="cm-stat-lbl">已终止</div><div class="cm-stat-val">0</div></div>
+    </div>
+    <div class="cm-old-stack">
+      <div class="cm-panel"><strong>三栏</strong>：人员活跃 | 任务态势 | 实时动态（5条）</div>
+      <div class="cm-panel"><strong>甘特图</strong>（全宽）<div class="cm-old-gantt"></div></div>
+      <div class="cm-panel"><strong>四态迷你看板</strong>（全宽）</div>
+      <div class="cm-old-dup">⚠️ 重复：最近动态（8条）— 与上方「实时动态」内容重叠</div>
+      <div class="cm-panel"><strong>AI 洞察</strong>（最底部，与顶栏站会/风险扫描脱节）</div>
+    </div>
+  </div>
+</div>
+
+<h2 id="s6">6. 模块说明</h2>
+<table>
+  <thead><tr><th>模块</th><th>层级</th><th>数据来源</th><th>交互</th></tr></thead>
+  <tbody>
+    <tr><td><strong>流动健康度</strong></td><td>L1</td><td>100 − 阻塞×15 − WIP超限×20 − P1未报×5</td><td>悬停展示扣分明细</td></tr>
+    <tr><td><strong>四态指标卡</strong></td><td>L1</td><td><code class="code">flowCategory()</code> + WIP_LIMITS</td><td>点击 → <code class="code">goTaskCenter(flow)</code></td></tr>
+    <tr><td><strong>行动队列</strong></td><td>L2</td><td>blocked → P1无进展 → overdue</td><td>行点击详情；按钮批量跳转</td></tr>
+    <tr><td><strong>7日趋势</strong></td><td>L2</td><td>activity_log + items 按日聚合</td><td>悬停显示当日数量</td></tr>
+    <tr><td><strong>人员负载</strong></td><td>L3</td><td>合并 buildMemberActivity + buildWorkloadStats</td><td>点击 → 个人主页 / 任务中心按人筛选</td></tr>
+    <tr><td><strong>快照/甘特 Tab</strong></td><td>L3</td><td>现有 renderMiniKanbanSnapshot + buildGanttRows</td><td>默认快照，甘特按需展开</td></tr>
+    <tr><td><strong>AI 洞察横幅</strong></td><td>L3</td><td><code class="code">state.insights</code> severity=high 优先</td><td>顶栏站会/风险生成后即时展示</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s7">7. KPI 体系</h2>
+<div class="grid-2">
+  <div class="card">
+    <h4>保留并增强</h4>
+    <ul>
+      <li>四态数量 + <span class="tag tag-yellow">RAG 边框</span> + 7日 sparkline</li>
+      <li>近14天吞吐量、平均 Lead Time（加趋势箭头）</li>
+      <li>WIP 使用率（超限红色强调）</li>
+    </ul>
+  </div>
+  <div class="card card--warn">
+    <h4>新增（与 v3.0 优先级打通）</h4>
+    <ul>
+      <li><strong>P1 待推进</strong>：priority=1 且进行中</li>
+      <li><strong>今日无进展</strong>：与工作站逻辑一致</li>
+      <li><strong>超期任务</strong>：ganttEndDate &lt; now</li>
+      <li><strong>流动健康度</strong>：综合分 0–100</li>
+    </ul>
+  </div>
+</div>
+
+<h3>RAG 阈值建议</h3>
+<table>
+  <tr><th>指标</th><th>🟢 绿</th><th>🟡 黄</th><th>🔴 红</th></tr>
+  <tr><td>执行中 WIP</td><td>≤ 80% 上限</td><td>80%–100%</td><td>&gt; 100%（当前 200%）</td></tr>
+  <tr><td>阻塞数</td><td>0</td><td>—</td><td>≥ 1</td></tr>
+  <tr><td>流动健康度</td><td>≥ 80</td><td>60–79</td><td>&lt; 60</td></tr>
+  <tr><td>P1 今日无进展</td><td>0</td><td>1–2</td><td>≥ 3</td></tr>
+</table>
+
+<h2 id="s8">8. 交互与性能</h2>
+<ul>
+  <li><strong>去重</strong>：删除底部「最近动态」，仅保留合并动态流（最多 8 条，按时间倒序）</li>
+  <li><strong>刷新</strong>：页面可见 15s 轮询，隐藏时 60s；优先 PATCH 数字 DOM，避免全量 <code class="code">innerHTML</code> 闪烁</li>
+  <li><strong>下钻</strong>：所有 KPI、行动项、人员行、快照卡片均可点击，参数与任务中心筛选对齐</li>
+  <li><strong>顶栏联动</strong>：站会摘要 / 风险扫描完成后，L3 洞察横幅置顶展示 high severity 结果</li>
+</ul>
+
+<h2 id="s9">9. 实施分期</h2>
+<table>
+  <thead><tr><th>阶段</th><th>内容</th><th>工期</th><th>收益</th></tr></thead>
+  <tbody>
+    <tr><td><span class="tag tag-green">第一期</span></td><td>行动队列 + 去重动态 + RAG 指标卡 + KPI 扩展 + 甘特/快照 Tab</td><td>1–2 天</td><td>首屏决策时间 ↓50%</td></tr>
+    <tr><td><span class="tag tag-blue">第二期</span></td><td>7日趋势图 + 人员负载合并 + 流动健康度 + AI 横幅联动</td><td>2–3 天</td><td>完整驾驶舱体验</td></tr>
+    <tr><td><span class="tag tag-gray">第三期</span></td><td><code class="code">/api/dashboard/summary</code> 聚合接口 + 历史快照周环比</td><td>可选</td><td>数据可信度与性能</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s10">10. 优化前后对比</h2>
+<table>
+  <thead><tr><th>维度</th><th>v3.0 现状</th><th>v4.0 目标</th></tr></thead>
+  <tbody>
+    <tr><td>首屏决策时间</td><td class="compare-old">~30s+（需滚动）</td><td class="compare-new">≤ 10s</td></tr>
+    <tr><td>纵向模块层数</td><td class="compare-old">7 层</td><td class="compare-new">3 层（倒金字塔）</td></tr>
+    <tr><td>动态 Feed</td><td class="compare-old">2 处重复</td><td class="compare-new">1 处合并</td></tr>
+    <tr><td>阻塞处理</td><td class="compare-old">仅数字</td><td class="compare-new">行动队列 + 快捷操作</td></tr>
+    <tr><td>优先级</td><td class="compare-old">未体现</td><td class="compare-new">P1 KPI + 行动排序</td></tr>
+    <tr><td>甘特图</td><td class="compare-old">默认全宽展示</td><td class="compare-new">Tab 按需展开</td></tr>
+    <tr><td>与工作站</td><td class="compare-old">逻辑独立</td><td class="compare-new">今日无进展等指标一致</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s11">11. 代码映射（落地时）</h2>
+<table>
+  <thead><tr><th>改动点</th><th>文件</th><th>函数/模块</th></tr></thead>
+  <tbody>
+    <tr><td>驾驶舱主体重构</td><td><code class="code">public/js/app.js</code></td><td><code class="code">renderGlobalKanbanBody()</code></td></tr>
+    <tr><td>行动队列</td><td><code class="code">public/js/app.js</code></td><td>新增 <code class="code">buildActionQueue()</code></td></tr>
+    <tr><td>健康度 / 趋势</td><td><code class="code">public/js/app.js</code></td><td>新增 <code class="code">buildFlowHealth()</code>、<code class="code">buildFlowTrend()</code></td></tr>
+    <tr><td>KPI 聚合（可选）</td><td><code class="code">server/db.js</code></td><td><code class="code">getDashboardSummary()</code></td></tr>
+    <tr><td>样式</td><td><code class="code">public/css/style.css</code></td><td><code class="code">.gk-*</code> 扩展为 <code class="code">.cockpit-*</code></td></tr>
+    <tr><td>文档</td><td><code class="code">public/FDE管理平台开发方案.html</code></td><td>§6.3 全局看板更新为 v4.0</td></tr>
+  </tbody>
+</table>
+
+<div class="verdict" style="margin-top:1.5rem">
+  <strong>下一步：</strong>v4.0 驾驶舱已落地（流动健康度、行动队列、RAG 指标、7 日趋势、人员负载合并、快照/甘特 Tab、AI 洞察横幅）。可选第三期：聚合 API + 历史周环比。
+</div>
+
+</main>
+</div>
+
+<footer class="footer">
+  FDE管理平台 · 全局看板驾驶舱优化方案 v4.0 预览 · 2026-07-12<br>
+  <a href="/">进入平台</a> ·
+  <a href="/FDE管理平台布局优化方案.html">布局方案</a> ·
+  <a href="/FDE管理平台开发方案.html">开发方案</a> ·
+  <a href="https://github.com/Rabit11/FDE-" target="_blank" rel="noopener">GitHub FDE-</a>
+</footer>
+
+<script>
+function switchPreview(which) {
+  document.querySelectorAll('.preview-tab').forEach((t, i) => {
+    t.classList.toggle('active', (which === 'new' && i === 0) || (which === 'old' && i === 1));
+  });
+  document.getElementById('preview-new').classList.toggle('active', which === 'new');
+  document.getElementById('preview-old').classList.toggle('active', which === 'old');
+}
+</script>
+</body>
+</html>

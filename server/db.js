@@ -42,6 +42,14 @@ function load() {
       i.req_no = `REQ-${year}-${String(data.req_counter[year]).padStart(4, '0')}`;
       healed = true;
     }
+    const p = Number(i.priority);
+    if (![1, 2, 3].includes(p)) {
+      i.priority = 3;
+      healed = true;
+    } else if (i.priority !== p) {
+      i.priority = p;
+      healed = true;
+    }
     if (!i.reviewer && i.created_by && data.users?.length) {
       const creator = data.users.find(u => u.name === i.created_by);
       if (creator && (creator.capabilities || []).includes('reviewer')) {
@@ -222,7 +230,7 @@ const queries = {
     return _data.items.filter(i =>
       (i.assignee === userName || (i.assistants || []).includes(userName)) &&
       active.includes(i.status)
-    ).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+    ).sort((a, b) => (a.priority || 3) - (b.priority || 3) || (b.updated_at || '').localeCompare(a.updated_at || ''));
   },
   healStuckSubmissions() {
     let count = 0;
@@ -334,9 +342,15 @@ const queries = {
       item.blocked_reason = `[${typeLabels[data.blocker_type] || data.blocker_type}] ${data.blocker_desc || data.description}`;
     }
     item.updated_at = new Date().toISOString();
-    queries.logActivity(itemId, 'progress', `${data.user} 提交进展${data.blocker_type && data.blocker_type !== 'none' ? ' · 卡点: ' + data.blocker_type : ''}`, data.user);
+    const typeLabels = { resource: '资源冲突', time: '时间冲突', technical: '技术问题', other: '其他' };
+    const progText = (data.description || '').trim();
+    const blockerText = data.blocker_type && data.blocker_type !== 'none'
+      ? `[${typeLabels[data.blocker_type] || data.blocker_type}] ${(data.blocker_desc || data.description || '').trim()}`.trim()
+      : '';
+    const progressText = progText || blockerText;
+    const activity = queries.logActivity(itemId, 'progress', '提交进展', data.user, { progress_text: progressText });
     queries._persist();
-    return { item, update };
+    return { item, update, activity: queries.enrichActivityEntry(activity) };
   },
   getUserProjects(userName) {
     const items = _data.items.filter(i =>
@@ -344,7 +358,7 @@ const queries = {
       (i.assignee === userName || (i.assistants || []).includes(userName) || i.created_by === userName)
     );
     return items.map(i => queries.mapProfileProjectRow(i))
-      .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+      .sort((a, b) => (a.priority || 3) - (b.priority || 3) || (b.updated_at || '').localeCompare(a.updated_at || ''));
   },
   getUserReviewProjects(userName) {
     const items = _data.items.filter(i =>
@@ -352,7 +366,7 @@ const queries = {
       i.reviewer === userName
     );
     return items.map(i => queries.mapProfileProjectRow(i))
-      .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+      .sort((a, b) => (a.priority || 3) - (b.priority || 3) || (b.updated_at || '').localeCompare(a.updated_at || ''));
   },
   mapProfileProjectRow(i) {
     return {
@@ -371,23 +385,63 @@ const queries = {
       description: i.description || '',
       acceptance_criteria: i.acceptance_criteria || '',
       progress_updates: i.progress_updates || [],
+      priority: [1, 2, 3].includes(Number(i.priority)) ? Number(i.priority) : 3,
       created_at: i.created_at || null,
       completed_at: i.completed_at || null,
       updated_at: i.updated_at || i.created_at,
     };
   },
-  logActivity(itemId, action, detail, actor = 'system') {
-    _data.activity_log.push({
+  enrichActivityEntry(a) {
+    const item = _data.items.find(i => i.id === a.item_id);
+    let progress_text = a.progress_text || null;
+    if (a.action === 'progress' && !progress_text) {
+      const parsed = (a.detail || '').match(/提交进展[：:]\s*(.+)/);
+      if (parsed) progress_text = parsed[1].trim();
+      else if (item) {
+        const actTime = new Date(a.created_at).getTime();
+        const match = (item.progress_updates || []).find(u => {
+          const t = new Date(u.created_at || `${u.date}T12:00:00`).getTime();
+          return u.user === a.actor && Math.abs(t - actTime) < 120000;
+        });
+        if (match) progress_text = (match.description || match.blocker_desc || '').trim();
+      }
+      if (!progress_text && /^.+提交进展$/.test((a.detail || '').trim())) progress_text = '（历史记录无正文）';
+    }
+    return {
+      ...a,
+      item_title: a.item_title || item?.title || null,
+      progress_text,
+    };
+  },
+  logActivity(itemId, action, detail, actor = 'system', extra = {}) {
+    const item = _data.items.find(i => i.id === itemId);
+    const entry = {
       id: uuid(), item_id: itemId, action, detail, actor,
+      progress_text: extra.progress_text || null,
+      item_title: extra.item_title || item?.title || null,
       created_at: new Date().toISOString(),
-    });
+    };
+    _data.activity_log.push(entry);
     queries._persist();
+    return entry;
   },
   getActivity(limit = 50) {
-    return _data.activity_log
-      .map(a => ({ ...a, item_title: _data.items.find(i => i.id === a.item_id)?.title }))
-      .sort((a, b) => b.created_at.localeCompare(a.created_at))
-      .slice(0, limit);
+    const SPECIFIC_ACTIONS = new Set([
+      'progress', 'completed', 'confirmed', 'reviewer_terminate', 'reviewer_revoke',
+      'reviewer_reassign', 'reviewer_reject', 'dispatched', 'priority_changed', 'deleted',
+      'auto_approved', 'auto_assigned', 'created',
+    ]);
+    const enriched = _data.activity_log
+      .map(a => queries.enrichActivityEntry(a))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const filtered = enriched.filter((a, i, arr) => {
+      if (a.action !== 'status_change') return true;
+      const t = new Date(a.created_at).getTime();
+      return !arr.some((b, j) => j !== i && b.item_id === a.item_id
+        && SPECIFIC_ACTIONS.has(b.action)
+        && Math.abs(new Date(b.created_at).getTime() - t) < 8000);
+    });
+    return filtered.slice(0, limit);
   },
   getMetrics() {
     const byStatus = {};
