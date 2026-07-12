@@ -59,6 +59,19 @@ function isLeaderUser() {
   return isReviewerUser();
 }
 
+function leaderNavConfig(user = state.user) {
+  const caps = user?.capabilities || [];
+  if (!caps.includes('reviewer') && user?.role !== 'admin') return null;
+  const nav = [
+    { id: 'dashboard', label: '📊 全局看板' },
+    { id: 'taskcenter', label: '📋 任务中心' },
+    { id: 'demandai', label: user?.role === 'admin' ? '🧠 需求与 AI 中心' : '🧠 需求与 AI' },
+    { id: 'profile', label: '👤 我的' },
+  ];
+  if (user?.role === 'admin') nav.push({ id: 'team', label: '👥 团队' });
+  return { nav, defaultView: 'dashboard' };
+}
+
 function canModifyKanban() {
   return isReviewerUser();
 }
@@ -122,7 +135,8 @@ function updateWorkflowBadge() {
 
 function buildNav() {
   const nav = document.getElementById('navMenu');
-  const items = state.user?.nav || state.roleConfig?.nav || [];
+  const leader = leaderNavConfig();
+  const items = leader?.nav || state.user?.nav || state.roleConfig?.nav || [];
   nav.innerHTML = items.map(n => `<button class="nav-item" data-view="${n.id}">${n.label}</button>`).join('');
   nav.querySelectorAll('.nav-item').forEach(btn => btn.addEventListener('click', () => navigate(btn.dataset.view)));
 }
@@ -2335,8 +2349,15 @@ async function initApp() {
   if (!getToken()) { location.href = '/login.html'; return; }
   try {
     const me = await api('/auth/me');
-    state.user = { ...me.user, dept: userDeptLabel(me.user) };
-    state.roleConfig = me.roleConfig;
+    const leader = leaderNavConfig(me.user);
+    state.user = {
+      ...me.user,
+      dept: userDeptLabel(me.user),
+      ...(leader ? { nav: leader.nav, defaultView: leader.defaultView } : {}),
+    };
+    state.roleConfig = leader
+      ? { ...me.roleConfig, nav: leader.nav, defaultView: leader.defaultView }
+      : me.roleConfig;
     state.llmEnabled = me.llmEnabled;
     state.aiStatus = me.ai;
     setupUserCard();
