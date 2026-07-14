@@ -306,6 +306,13 @@ app.get('/api/items/:id', (req, res) => {
   res.json(item);
 });
 
+app.post('/api/items/:id/check-view', (req, res) => {
+  const item = queries.getItem(req.params.id);
+  if (!item) return res.status(404).json({ error: '任务不存在' });
+  const updated = queries.recordCheckView(req.params.id, req.user.name);
+  res.json(updated || item);
+});
+
 app.post('/api/items', async (req, res) => {
   const body = { ...req.body, actor: req.user.name, created_by: req.user.name };
 

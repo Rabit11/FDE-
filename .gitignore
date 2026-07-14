@@ -2,8 +2,10 @@ node_modules/
 data/uploads/
 data/platform.json
 .env
+deploy/local/.env
 .DS_Store
 *.log
 *.m4a
 *.mp3
 *.wav
+fde-deploy.tgz

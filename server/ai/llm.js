@@ -1,6 +1,7 @@
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
+const { normalizeTaskTitle } = require('../db');
 
 // 默认使用 DeepSeek（国产顶尖大模型，OpenAI 兼容）
 const PROVIDERS = {
@@ -273,6 +274,7 @@ ${content.slice(0, 12000)}`;
 
   const parsed = parseJsonSafe(result);
   if (parsed?.title) {
+    parsed.title = normalizeTaskTitle(parsed.title);
     parsed.engine = 'llm';
     return parsed;
   }

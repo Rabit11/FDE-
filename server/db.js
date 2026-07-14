@@ -8,9 +8,14 @@ const dbFile = path.join(dataDir, 'platform.json');
 
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
+function normalizeTaskTitle(title) {
+  if (!title || typeof title !== 'string') return title || '';
+  return title.replace(/^#+\s*/, '').trim();
+}
+
 function load() {
   if (!fs.existsSync(dbFile)) {
-    return { items: [], activity_log: [], ai_insights: [], chat_history: [], voice_documents: [] };
+    return { items: [], users: [], activity_log: [], ai_insights: [], chat_history: [], voice_documents: [], req_counter: {} };
   }
   const data = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
   if (!data.users) data.users = [];
@@ -28,6 +33,14 @@ function load() {
     if (i.reviewer === undefined) i.reviewer = null;
     if (i.team_size === undefined) i.team_size = null;
     if (i.blocker_type === undefined) i.blocker_type = null;
+    if (i.check_count === undefined) {
+      i.check_count = 0;
+      healed = true;
+    }
+    if (!i.check_views || typeof i.check_views !== 'object') {
+      i.check_views = {};
+      healed = true;
+    }
     if (i.sprint_id) {
       delete i.sprint_id;
       healed = true;
@@ -64,6 +77,11 @@ function load() {
     if (i.status === 'submitted' && i.reviewer && i.assignee) {
       i.status = 'in_progress';
       i.updated_at = new Date().toISOString();
+      healed = true;
+    }
+    const cleanTitle = normalizeTaskTitle(i.title);
+    if (cleanTitle && cleanTitle !== i.title) {
+      i.title = cleanTitle;
       healed = true;
     }
     if (i.type === 'task' && !i.assignee && i.parent_id) {
@@ -342,7 +360,7 @@ const queries = {
     }
     const reqNo = (status === 'submitted' || data.generate_req_no) ? queries.generateReqNo() : (data.req_no || null);
     const item = {
-      id: uuid(), type: data.type || 'story', title: data.title,
+      id: uuid(), type: data.type || 'story', title: normalizeTaskTitle(data.title),
       req_no: reqNo,
       description: data.description || '', status,
       priority: data.priority ?? 3, story_points: data.story_points ?? 0,
@@ -357,6 +375,8 @@ const queries = {
       blocker_type: data.blocker_type || null,
       progress_updates: data.progress_updates || [],
       demo_url: data.demo_url || null, acceptance_status: 'pending', acceptance_feedback: null,
+      check_count: 0,
+      check_views: {},
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(), completed_at: null,
     };
     _data.items.push(item);
@@ -370,7 +390,10 @@ const queries = {
     const prev = { ..._data.items[idx] };
     const current = _data.items[idx];
     const fields = ['title', 'description', 'status', 'priority', 'story_points', 'assignee', 'assistants', 'parent_id', 'acceptance_criteria', 'blocked_reason', 'blocker_type', 'demo_url', 'acceptance_status', 'acceptance_feedback', 'created_by', 'reviewer', 'team_size', 'req_no'];
-    fields.forEach(f => { if (data[f] !== undefined) current[f] = data[f]; });
+    fields.forEach(f => {
+      if (data[f] === undefined) return;
+      current[f] = f === 'title' ? normalizeTaskTitle(data[f]) : data[f];
+    });
     if (data.status === 'terminated' && data.acceptance_status === undefined) {
       current.acceptance_status = 'terminated';
     }
@@ -472,7 +495,32 @@ const queries = {
       created_at: i.created_at || null,
       completed_at: i.completed_at || null,
       updated_at: i.updated_at || i.created_at,
+      check_count: Number(i.check_count) || 0,
     };
+  },
+  isTaskReviewer(item, userName) {
+    if (!item || !userName) return false;
+    return item.reviewer === userName;
+  },
+  /** 本任务审核人查看时累计检查次数（60 秒内同一审核人不重复计） */
+  recordCheckView(id, userName) {
+    const item = queries.getItem(id);
+    if (!item || !userName) return null;
+    if (!queries.isTaskReviewer(item, userName)) return item;
+    if (!item.check_last || typeof item.check_last !== 'object') item.check_last = {};
+    const now = Date.now();
+    const last = Number(item.check_last[userName]) || 0;
+    if (last && now - last < 60000) {
+      return item;
+    }
+    item.check_last[userName] = now;
+    if (!item.check_views || typeof item.check_views !== 'object') item.check_views = {};
+    item.check_views[userName] = (Number(item.check_views[userName]) || 0) + 1;
+    // 仅统计当前审核人的查看次数
+    item.check_count = Number(item.check_views[userName]) || 0;
+    item.updated_at = new Date().toISOString();
+    queries._persist();
+    return item;
   },
   enrichActivityEntry(a) {
     const item = _data.items.find(i => i.id === a.item_id);
@@ -570,4 +618,4 @@ const queries = {
   },
 };
 
-module.exports = { queries };
+module.exports = { queries, normalizeTaskTitle };

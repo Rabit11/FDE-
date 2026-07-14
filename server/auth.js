@@ -17,7 +17,7 @@ function normalizeDept(dept) {
 const NAV_ITEMS = {
   taskcenter: { id: 'taskcenter', label: '📋 任务中心', caps: ['reviewer'], roles: ['admin', 'manager'] },
   dashboard: { id: 'dashboard', label: '📊 概览', caps: ['reviewer'], roles: ['admin'] },
-  demandai: { id: 'demandai', label: '🧠 需求与 AI', caps: ['reviewer'], roles: ['admin', 'manager'] },
+  demandai: { id: 'demandai', label: '📤 提交需求', caps: ['reviewer'], roles: ['admin', 'manager'] },
   mywork: { id: 'mywork', label: '💼 今日工作台', caps: ['executor'], roles: [] },
   submit: { id: 'submit', label: '📤 提交需求', caps: ['proposer'], roles: [] },
   profile: { id: 'profile', label: '👤 我的', caps: [], roles: [] },
@@ -68,16 +68,15 @@ function getNavForUser(user) {
     if (user.role === 'admin') {
       nav.push({ id: 'team', label: '👥 团队管理' });
       nav.push({ id: 'dashboard', label: '📊 全局看板' });
-      nav.push({ id: 'taskcenter', label: '📋 任务中心' });
-      nav.push({ id: 'demandai', label: '🧠 需求与 AI 中心' });
       nav.push({ id: 'profile', label: '👤 我的' });
+      nav.push({ id: 'taskcenter', label: '📋 任务中心' });
+      nav.push({ id: 'demandai', label: '📤 提交需求' });
       return nav;
     }
     nav.push({ id: 'dashboard', label: '📊 全局看板' });
-    nav.push({ id: 'taskcenter', label: '📋 任务中心' });
-    nav.push({ id: 'demandai', label: user.role === 'admin' ? '🧠 需求与 AI 中心' : '🧠 需求与 AI' });
     nav.push({ id: 'profile', label: '👤 我的' });
-    if (user.role === 'admin') nav.push({ id: 'team', label: '👥 团队' });
+    nav.push({ id: 'taskcenter', label: '📋 任务中心' });
+    nav.push({ id: 'demandai', label: '📤 提交需求' });
     return nav;
   }
 

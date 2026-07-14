@@ -17,12 +17,25 @@
 
 ## 快速启动
 
+### 本地（推荐）
+```powershell
+.\deploy\local\start.ps1
+```
+访问 **http://localhost:3456**
+
+### 远程服务器
+```powershell
+.\deploy\remote\push-deploy.ps1
+```
+访问 **http://10.90.111.114:8084**（以 systemd 后台常驻：退出 SSH / 关闭本机不影响运行）
+
+部署配置分目录存放，详见 [`deploy/README.md`](deploy/README.md)。
+
+### 手动启动
 ```bash
 npm install
 npm start
 ```
-
-访问 **http://localhost:3456**
 
 GitHub: **https://github.com/Rabit11/FDE-**
 

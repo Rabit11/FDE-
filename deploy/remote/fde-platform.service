@@ -1,0 +1,21 @@
+[Unit]
+Description=FDE Management Platform (port 8084)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/data_SSD_21T/users/yanghuiran/yanghuiran/fde-platform
+Environment=PORT=8084
+Environment=NODE_ENV=production
+EnvironmentFile=-/data_SSD_21T/users/yanghuiran/yanghuiran/fde-platform/.env
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=15
+StandardOutput=append:/data_SSD_21T/users/yanghuiran/yanghuiran/fde-platform/fde.log
+StandardError=append:/data_SSD_21T/users/yanghuiran/yanghuiran/fde-platform/fde.log
+
+[Install]
+WantedBy=default.target

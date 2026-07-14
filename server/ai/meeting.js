@@ -2,6 +2,7 @@ const { v4: uuid } = require('uuid');
 const asr = require('./asr');
 const docparse = require('./docparse');
 const llm = require('./llm');
+const { normalizeTaskTitle } = require('../db');
 
 function saveMeetingRecord(queries, user, data) {
   const doc = {
@@ -76,7 +77,7 @@ async function parseToRequirement(docId, user, queries) {
   if (!parsed) {
     const lines = content.split('\n').filter(l => l.trim());
     parsed = {
-      title: lines[0]?.slice(0, 80) || '新需求',
+      title: normalizeTaskTitle(lines[0]?.slice(0, 80) || '新需求'),
       scene: content.slice(0, 500),
       acceptance: '待补充验收标准',
       deadline: '',
