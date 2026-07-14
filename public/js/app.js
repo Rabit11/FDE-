@@ -31,7 +31,7 @@ function flowCategory(item) {
   return 'in_progress';
 }
 
-let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], userReviewProjects: [], currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'list', demandAiTab: 'submit', submitTab: 'quick', profileShowAll: false, profileTaskTab: 'review', globalKanbanUpdatedAt: null, workbenchFilter: 'all' };
+let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], userReviewProjects: [], currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'board', demandAiTab: 'submit', submitTab: 'quick', profileShowAll: false, profileTaskTab: 'review', globalKanbanUpdatedAt: null, workbenchFilter: 'all' };
 
 let liveSyncTimer = null;
 const LIVE_SYNC_MS = 5000;
@@ -542,12 +542,12 @@ function setKanbanFilter(key, value) {
 }
 
 function renderKanbanViewTabs() {
-  const mode = state.kanbanViewMode || (isLeaderUser() ? 'board' : 'list');
+  const mode = state.kanbanViewMode || 'board';
   const listBtn = `<button type="button" class="kanban-view-tab ${mode === 'list' ? 'active' : ''}" data-mode="list" onclick="setKanbanViewMode('list')">📋 列表视图</button>`;
   const boardBtn = `<button type="button" class="kanban-view-tab ${mode === 'board' ? 'active' : ''}" data-mode="board" onclick="setKanbanViewMode('board')">📊 四列看板</button>`;
   return `<div class="kanban-view-toolbar">
     <div class="kanban-view-tabs">
-      ${isLeaderUser() ? `${boardBtn}${listBtn}` : `${listBtn}${boardBtn}`}
+      ${boardBtn}${listBtn}
     </div>
     <button type="button" class="btn btn-ghost btn-sm" onclick="refreshLiveView(true)" title="立即从服务器拉取最新数据">↻ 刷新</button>
     <button type="button" class="btn btn-ghost btn-sm kanban-export-btn" onclick="exportKanbanList()" title="导出当前筛选结果为 CSV">📥 导出清单</button>
@@ -1508,8 +1508,10 @@ function renderExecutorDashboard() {
 
 function renderKanbanCore() {
   if (!state.kanbanFilter) state.kanbanFilter = { flow: 'all', reviewer: '', executor: '' };
-  if (!state.kanbanViewMode || (!state.kanbanViewTouched && isLeaderUser())) {
-    state.kanbanViewMode = isLeaderUser() ? 'board' : (state.kanbanViewMode || 'list');
+  if (!state.kanbanViewTouched) {
+    state.kanbanViewMode = 'board';
+  } else if (!state.kanbanViewMode) {
+    state.kanbanViewMode = 'board';
   }
   const base = kanbanBaseItems();
   const filtered = applyKanbanFilters(base);
