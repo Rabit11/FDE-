@@ -15,13 +15,14 @@ function normalizeTaskTitle(title) {
 
 function load() {
   if (!fs.existsSync(dbFile)) {
-    return { items: [], users: [], activity_log: [], ai_insights: [], chat_history: [], voice_documents: [], req_counter: {} };
+    return { items: [], users: [], activity_log: [], ai_insights: [], chat_history: [], voice_documents: [], req_counter: {}, notifications: [] };
   }
   const data = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
   if (!data.users) data.users = [];
   if (!data.chat_history) data.chat_history = [];
   if (!data.voice_documents) data.voice_documents = [];
   if (!data.req_counter) data.req_counter = {};
+  if (!data.notifications) data.notifications = [];
   let healed = false;
   if (data.sprints) {
     delete data.sprints;
@@ -419,6 +420,7 @@ const queries = {
     if (data.status && data.status !== prev.status) {
       queries.logActivity(id, 'status_change', `${prev.status} → ${data.status}`, data.actor || 'user');
     }
+    queries.handleStatusNotify(prev, current, data.actor || 'user');
     queries._persist();
     return current;
   },
@@ -426,9 +428,207 @@ const queries = {
     _data.items = _data.items.filter(i => i.id !== id);
     queries._persist();
   },
+  relatedPeople(item) {
+    return [...new Set([
+      item?.reviewer,
+      item?.assignee,
+      ...(item?.assistants || []),
+      item?.created_by,
+    ].filter(Boolean))];
+  },
+  ensureNotifications() {
+    if (!_data.notifications) _data.notifications = [];
+  },
+  upsertNotification(user, payload) {
+    queries.ensureNotifications();
+    const existing = _data.notifications.find(n =>
+      n.user === user && n.item_id === payload.item_id && n.type === payload.type && !n.read
+    );
+    if (existing) {
+      existing.title = payload.title;
+      existing.detail = payload.detail;
+      existing.actor = payload.actor || existing.actor;
+      existing.created_at = new Date().toISOString();
+      return existing;
+    }
+    const note = {
+      id: uuid(),
+      user,
+      type: payload.type,
+      item_id: payload.item_id,
+      title: payload.title,
+      detail: payload.detail || '',
+      actor: payload.actor || null,
+      read: false,
+      created_at: new Date().toISOString(),
+    };
+    _data.notifications.unshift(note);
+    if (_data.notifications.length > 500) _data.notifications = _data.notifications.slice(0, 500);
+    return note;
+  },
+  notifyBlocked(item, actor) {
+    if (!item) return;
+    const detail = item.blocked_reason || '任务进入阻塞，请尽快处理';
+    const targets = queries.relatedPeople(item).filter(name => name !== actor);
+    targets.forEach(user => {
+      queries.upsertNotification(user, {
+        type: 'blocked',
+        item_id: item.id,
+        title: item.title,
+        detail,
+        actor,
+      });
+    });
+  },
+  notifyTerminated(item, actor) {
+    if (!item) return;
+    const detail = item.acceptance_feedback || '任务已被终止';
+    const targets = queries.relatedPeople(item).filter(name => name !== actor);
+    targets.forEach(user => {
+      queries.upsertNotification(user, {
+        type: 'terminated',
+        item_id: item.id,
+        title: item.title,
+        detail,
+        actor,
+      });
+    });
+  },
+  notifyAssigned(item, actor) {
+    if (!item) return;
+    const assist = (item.assistants || []).length ? `，协助: ${item.assistants.join('、')}` : '';
+    const detail = `${actor || '同事'} 提交了审核备案任务，审核人 ${item.reviewer || '-'}，主执行 ${item.assignee || '-'}${assist}`;
+    const targets = queries.relatedPeople(item).filter(name => name !== actor);
+    targets.forEach(user => {
+      queries.upsertNotification(user, {
+        type: 'assigned',
+        item_id: item.id,
+        title: item.title,
+        detail,
+        actor,
+      });
+    });
+  },
+  notifyCompleted(item, actor) {
+    if (!item) return;
+    const detail = `${actor || '同事'} 已完成任务，已归入已归档`;
+    const targets = queries.relatedPeople(item).filter(name => name !== actor);
+    targets.forEach(user => {
+      queries.upsertNotification(user, {
+        type: 'completed',
+        item_id: item.id,
+        title: item.title,
+        detail,
+        actor,
+      });
+    });
+  },
+  notifyReassigned(item, actor, { previous, comment } = {}) {
+    if (!item) return;
+    const assist = (item.assistants || []).length ? `，协助: ${item.assistants.join('、')}` : '';
+    const detail = `${actor || '领导'} 二次分配：主执行 ${item.assignee || '-'}${assist}${comment ? ` · ${comment}` : ''}`;
+    const people = new Set([
+      ...queries.relatedPeople(item),
+      ...queries.relatedPeople(previous || {}),
+    ]);
+    [...people].filter(name => name && name !== actor).forEach(user => {
+      queries.upsertNotification(user, {
+        type: 'reassigned',
+        item_id: item.id,
+        title: item.title,
+        detail,
+        actor,
+      });
+    });
+  },
+  resolveItemNotifications(itemId, type) {
+    queries.ensureNotifications();
+    let changed = false;
+    _data.notifications.forEach(n => {
+      if (n.item_id === itemId && (!type || n.type === type) && !n.read) {
+        n.read = true;
+        n.read_at = new Date().toISOString();
+        changed = true;
+      }
+    });
+    return changed;
+  },
+  handleStatusNotify(prev, current, actor) {
+    if (!prev || !current) return;
+    if (prev.status !== 'blocked' && current.status === 'blocked') {
+      queries.notifyBlocked(current, actor);
+    }
+    if (prev.status === 'blocked' && current.status !== 'blocked') {
+      queries.resolveItemNotifications(current.id, 'blocked');
+    }
+    if (prev.status !== 'terminated' && current.status === 'terminated') {
+      queries.notifyTerminated(current, actor);
+    }
+    if (prev.status !== 'done' && current.status === 'done') {
+      queries.notifyCompleted(current, actor);
+    }
+  },
+  syncLiveBlockedNotifications() {
+    queries.ensureNotifications();
+    let created = false;
+    (_data.items || []).forEach(item => {
+      if (item.status !== 'blocked') return;
+      queries.relatedPeople(item).forEach(user => {
+        const has = _data.notifications.some(n =>
+          n.user === user && n.item_id === item.id && n.type === 'blocked'
+        );
+        if (!has) {
+          queries.upsertNotification(user, {
+            type: 'blocked',
+            item_id: item.id,
+            title: item.title,
+            detail: item.blocked_reason || '任务当前处于阻塞',
+            actor: null,
+          });
+          created = true;
+        }
+      });
+    });
+    if (created) queries._persist();
+  },
+  getNotificationsForUser(userName) {
+    queries.ensureNotifications();
+    queries.syncLiveBlockedNotifications();
+    return _data.notifications
+      .filter(n => n.user === userName)
+      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  },
+  markNotificationsRead(userName, { ids, all, types } = {}) {
+    queries.ensureNotifications();
+    const now = new Date().toISOString();
+    let count = 0;
+    _data.notifications.forEach(n => {
+      if (n.user !== userName || n.read) return;
+      if (all) {
+        n.read = true;
+        n.read_at = now;
+        count += 1;
+        return;
+      }
+      if (ids?.length && ids.includes(n.id)) {
+        n.read = true;
+        n.read_at = now;
+        count += 1;
+        return;
+      }
+      if (types?.length && types.includes(n.type)) {
+        n.read = true;
+        n.read_at = now;
+        count += 1;
+      }
+    });
+    if (count) queries._persist();
+    return count;
+  },
   addProgressUpdate(itemId, data) {
     const item = _data.items.find(i => i.id === itemId);
     if (!item) return null;
+    const prevStatus = item.status;
     if (!item.progress_updates) item.progress_updates = [];
     const update = {
       id: uuid(),
@@ -455,6 +655,9 @@ const queries = {
       : '';
     const progressText = progText || blockerText;
     const activity = queries.logActivity(itemId, 'progress', '提交进展', data.user, { progress_text: progressText });
+    if (prevStatus !== 'blocked' && item.status === 'blocked') {
+      queries.notifyBlocked(item, data.user);
+    }
     queries._persist();
     return { item, update, activity: queries.enrichActivityEntry(activity) };
   },

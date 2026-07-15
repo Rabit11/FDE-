@@ -70,13 +70,13 @@ function getNavForUser(user) {
       nav.push({ id: 'dashboard', label: '📊 全局看板' });
       nav.push({ id: 'profile', label: '👤 我的' });
       nav.push({ id: 'taskcenter', label: '📋 任务中心' });
-      nav.push({ id: 'demandai', label: '📤 提交需求' });
+      nav.push({ id: 'submit', label: '📤 提交需求' });
       return nav;
     }
     nav.push({ id: 'dashboard', label: '📊 全局看板' });
     nav.push({ id: 'profile', label: '👤 我的' });
     nav.push({ id: 'taskcenter', label: '📋 任务中心' });
-    nav.push({ id: 'demandai', label: '📤 提交需求' });
+    nav.push({ id: 'submit', label: '📤 提交需求' });
     return nav;
   }
 

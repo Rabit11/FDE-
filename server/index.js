@@ -327,6 +327,8 @@ app.post('/api/items', async (req, res) => {
       team_size: body.team_size || 1 + (body.assistants?.length || 0),
     });
     queries.logActivity(item.id, 'dispatched', `任务已自动派发给 ${item.assignee}${(item.assistants||[]).length ? '，协助: ' + item.assistants.join('、') : ''}，审核人 ${item.reviewer} 备案`, body.reviewer);
+    queries.notifyAssigned(item, req.user.name);
+    queries._persist();
     return res.json(item);
   }
 
@@ -355,6 +357,10 @@ app.post('/api/items', async (req, res) => {
       req.user.name,
     );
     if (approved) item = approved;
+  }
+  if (item.reviewer || item.assignee) {
+    queries.notifyAssigned(item, req.user.name);
+    queries._persist();
   }
   res.json(item);
 });
@@ -537,6 +543,7 @@ app.post('/api/items/:id/reviewer-reassign', requirePermission('review', 'all'),
   if (!assignee?.trim()) {
     return res.status(400).json({ error: '请选择主执行人' });
   }
+  const previous = { ...item };
   const updated = queries.updateItem(req.params.id, {
     status: 'in_progress',
     assignee: assignee.trim(),
@@ -551,6 +558,8 @@ app.post('/api/items/:id/reviewer-reassign', requirePermission('review', 'all'),
     `领导 ${req.user.name} 二次分配: ${assignee}${(assistants || []).length ? '，协助: ' + assistants.join('、') : ''}${comment ? ' · ' + comment : ''}`,
     req.user.name,
   );
+  queries.notifyReassigned(updated, req.user.name, { previous, comment });
+  queries._persist();
   res.json(updated);
 });
 
@@ -596,6 +605,19 @@ app.post('/api/items/:id/accept', requirePermission('acceptance', 'all'), (req, 
 // ── Activity & Metrics ──
 app.get('/api/activity', (req, res) => res.json(queries.getActivity(Number(req.query.limit) || 50)));
 app.get('/api/metrics', (req, res) => res.json(queries.getMetrics()));
+
+app.get('/api/notifications', (req, res) => {
+  const list = queries.getNotificationsForUser(req.user.name);
+  const unread = list.filter(n => !n.read).length;
+  res.json({ notifications: list, unread });
+});
+
+app.post('/api/notifications/read', (req, res) => {
+  const { ids, all, types } = req.body || {};
+  const count = queries.markNotificationsRead(req.user.name, { ids, all: !!all, types });
+  const list = queries.getNotificationsForUser(req.user.name);
+  res.json({ ok: true, count, notifications: list, unread: list.filter(n => !n.read).length });
+});
 
 // ── AI Endpoints ──
 app.post('/api/ai/split-requirement', requirePermission('ai', 'ai_copilot', 'all'), async (req, res) => {

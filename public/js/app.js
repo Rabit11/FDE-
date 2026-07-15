@@ -31,10 +31,10 @@ function flowCategory(item) {
   return 'in_progress';
 }
 
-let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], userReviewProjects: [], currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'board', demandAiTab: 'submit', submitTab: 'quick', profileShowAll: false, profileTaskTab: 'review', globalKanbanUpdatedAt: null, workbenchFilter: 'all' };
+let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], userReviewProjects: [], notifications: [], notificationsUnread: 0, currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'board', demandAiTab: 'submit', submitTab: 'quick', profileShowAll: false, profileTaskTab: 'review', globalKanbanUpdatedAt: null, workbenchFilter: 'all' };
 
 let liveSyncTimer = null;
-const LIVE_SYNC_MS = 5000;
+const LIVE_SYNC_MS = 3000;
 
 function getToken() { return localStorage.getItem('agileai_token'); }
 
@@ -77,7 +77,7 @@ function leaderNavConfig(user = state.user) {
         { id: 'dashboard', label: '📊 全局看板' },
         { id: 'profile', label: '👤 我的' },
         { id: 'taskcenter', label: '📋 任务中心' },
-        { id: 'demandai', label: '📤 提交需求' },
+        { id: 'submit', label: '📤 提交需求' },
       ],
       defaultView: 'team',
     };
@@ -86,7 +86,7 @@ function leaderNavConfig(user = state.user) {
     { id: 'dashboard', label: '📊 全局看板' },
     { id: 'profile', label: '👤 我的' },
     { id: 'taskcenter', label: '📋 任务中心' },
-    { id: 'demandai', label: '📤 提交需求' },
+    { id: 'submit', label: '📤 提交需求' },
   ];
   return { nav, defaultView: 'dashboard' };
 }
@@ -113,12 +113,12 @@ function myWorkRole(item, userName = state.user?.name) {
 
 function taskPeopleText(item) {
   const assist = (item.assistants || []).length ? ` · 其他执行: ${item.assistants.join('、')}` : '';
-  return `审核: ${item.reviewer || '-'} · 主执行: ${item.assignee || '-'}${assist}`;
+  return `提出: ${item.created_by || '-'} · 审核: ${item.reviewer || '-'} · 主执行: ${item.assignee || '-'}${assist}`;
 }
 
 function taskPeopleHtml(item) {
-  const assist = (item.assistants || []).length ? ` · 其他执行: ${item.assistants.map(esc).join('、')}` : '';
-  return `审核人: <strong>${esc(item.reviewer || '-')}</strong> · 主执行: <strong>${esc(item.assignee || '-')}</strong>${assist}`;
+  const assist = (item.assistants || []).length ? ` · 其他执行: <strong>${(item.assistants || []).map(esc).join('、')}</strong>` : '';
+  return `需求提出人: <strong>${esc(item.created_by || '-')}</strong> · 审核人: <strong>${esc(item.reviewer || '-')}</strong> · 主执行: <strong>${esc(item.assignee || '-')}</strong>${assist}`;
 }
 
 function workflowItems() {
@@ -204,9 +204,9 @@ function refreshActivityFeedDom() {
 async function refreshCurrentView() {
   const view = state.currentView;
   const renderers = {
-    taskcenter: renderTaskCenter, dashboard: renderDashboard, demandai: renderDemandAI,
+    taskcenter: renderTaskCenter, dashboard: renderDashboard, demandai: renderSubmit,
     mywork: renderMyWork, submit: renderSubmit, profile: renderProfile, team: renderTeam,
-    kanban: renderTaskCenter, review: renderTaskCenter, acceptance: renderTaskCenter, ai: renderDemandAI,
+    kanban: renderTaskCenter, review: renderTaskCenter, acceptance: renderTaskCenter, ai: renderSubmit,
   };
   const render = renderers[view];
   if (!render) return;
@@ -301,14 +301,108 @@ function startLiveSyncPolling() {
 async function loadData() {
   const fetches = [
     api('/items'), api('/metrics'), api('/activity?limit=40'), api('/ai/insights'), api('/users'),
+    api('/notifications').catch(() => ({ notifications: [], unread: 0 })),
   ];
   const isExecutor = (state.user?.capabilities || []).includes('executor');
   if (isExecutor) fetches.push(api('/items/my-work').catch(() => []));
   const results = await Promise.all(fetches);
-  const [items, metrics, activity, insights, users] = results;
-  const myWorkItems = isExecutor ? (results[5] || []) : [];
-  state = { ...state, items, myWorkItems, metrics, activity, insights, users: normalizeUsers(users) };
+  const [items, metrics, activity, insights, users, notifPayload] = results;
+  const myWorkItems = isExecutor ? (results[6] || []) : [];
+  const notifications = notifPayload?.notifications || [];
+  const notificationsUnread = notifPayload?.unread ?? notifications.filter(n => !n.read).length;
+  state = { ...state, items, myWorkItems, metrics, activity, insights, users: normalizeUsers(users), notifications, notificationsUnread };
   updateWorkflowBadge();
+  updateNavAlerts();
+}
+
+function unreadNotifications(types) {
+  const list = (state.notifications || []).filter(n => !n.read);
+  if (!types?.length) return list;
+  return list.filter(n => types.includes(n.type));
+}
+
+function navAlertViews() {
+  const views = new Set();
+  const unread = unreadNotifications(['blocked', 'terminated', 'assigned', 'completed', 'reassigned']);
+  if (!unread.length) return views;
+  // 领导红点在「我的」；纯执行人员红点在「今日工作台」
+  if (isLeaderUser()) views.add('profile');
+  else if ((state.user?.capabilities || []).includes('executor')) views.add('mywork');
+  else views.add('profile');
+  return views;
+}
+
+function updateNavAlerts() {
+  const alertViews = navAlertViews();
+  document.querySelectorAll('#navMenu .nav-item').forEach(btn => {
+    const need = alertViews.has(btn.dataset.view);
+    btn.classList.toggle('has-alert', need);
+    let dot = btn.querySelector('.nav-alert-dot');
+    if (need && !dot) {
+      dot = document.createElement('span');
+      dot.className = 'nav-alert-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      btn.appendChild(dot);
+    } else if (!need && dot) {
+      dot.remove();
+    }
+  });
+}
+
+function renderAlertBanner(forView) {
+  const types = ['blocked', 'terminated', 'assigned', 'completed', 'reassigned'];
+  const unread = unreadNotifications(types);
+  if (!unread.length) return '';
+  const kindMeta = {
+    blocked: { label: '阻塞', cls: 'blocked' },
+    terminated: { label: '已终止', cls: 'terminated' },
+    assigned: { label: '新任务', cls: 'assigned' },
+    completed: { label: '已完成', cls: 'completed' },
+    reassigned: { label: '二次分配', cls: 'reassigned' },
+  };
+  const rows = unread.slice(0, 8).map(n => {
+    const meta = kindMeta[n.type] || { label: n.type, cls: 'assigned' };
+    return `<div class="notif-alert-row notif-alert-row--${meta.cls}">
+      <span class="notif-alert-kind">${meta.label}</span>
+      <span class="notif-alert-title">${esc(n.title || '未命名任务')}</span>
+      <span class="notif-alert-detail">${esc((n.detail || '').slice(0, 80))}</span>
+      ${n.item_id ? `<button type="button" class="btn btn-ghost btn-sm" onclick="openNotificationTask('${n.item_id}','${n.id}')">查看</button>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="notif-alert-banner card">
+    <div class="notif-alert-head">
+      <strong>待处理提醒 · ${unread.length}</strong>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="markAllNotificationsRead()">全部标为已读</button>
+    </div>
+    ${rows}
+  </div>`;
+}
+
+async function markAllNotificationsRead() {
+  try {
+    const res = await api('/notifications/read', { method: 'POST', body: { all: true } });
+    state.notifications = res.notifications || [];
+    state.notificationsUnread = res.unread || 0;
+    updateNavAlerts();
+    toast('提醒已全部标为已读');
+    if (state.currentView === 'profile' || state.currentView === 'mywork') {
+      document.getElementById('content').innerHTML = state.currentView === 'profile' ? renderProfile() : renderMyWork();
+    }
+  } catch (e) {
+    toast(e.message || '操作失败', 'error');
+  }
+}
+
+async function openNotificationTask(itemId, notifId) {
+  try {
+    if (notifId) {
+      const res = await api('/notifications/read', { method: 'POST', body: { ids: [notifId] } });
+      state.notifications = res.notifications || [];
+      state.notificationsUnread = res.unread || 0;
+      updateNavAlerts();
+    }
+  } catch { /* ignore */ }
+  showTaskDetailView(itemId);
 }
 
 function updateWorkflowBadge() {
@@ -327,8 +421,9 @@ function buildNav() {
   const nav = document.getElementById('navMenu');
   const leader = leaderNavConfig();
   const items = leader?.nav || state.user?.nav || state.roleConfig?.nav || [];
-  nav.innerHTML = items.map(n => `<button class="nav-item" data-view="${n.id}">${n.label}</button>`).join('');
+  nav.innerHTML = items.map(n => `<button class="nav-item" data-view="${n.id}"><span class="nav-item-label">${n.label}</span></button>`).join('');
   nav.querySelectorAll('.nav-item').forEach(btn => btn.addEventListener('click', () => navigate(btn.dataset.view)));
+  updateNavAlerts();
 }
 
 function buildTopbar() {
@@ -336,7 +431,7 @@ function buildTopbar() {
   if (isReviewerUser()) {
     el.innerHTML = `<button class="btn btn-ghost" id="btnStandup">📋 站会摘要</button><button class="btn btn-ghost" id="btnRisks">⚠️ 风险扫描</button><button class="btn btn-ghost" id="btnDemand">📤 新建需求</button><button class="btn btn-primary" id="btnNewItem">+ 快捷新建</button>`;
     document.getElementById('btnNewItem')?.addEventListener('click', showNewItemModal);
-    document.getElementById('btnDemand')?.addEventListener('click', () => { state.demandAiTab = 'submit'; navigate('demandai'); });
+    document.getElementById('btnDemand')?.addEventListener('click', () => { state.submitTab = 'quick'; navigate('submit'); });
   } else {
     el.innerHTML = `<button class="btn btn-primary" id="btnNewItem">+ 上报进展</button>`;
     document.getElementById('btnNewItem')?.addEventListener('click', () => navigate('mywork'));
@@ -453,8 +548,9 @@ function goWorkflowBadge() {
 }
 
 function setDemandAiTab(tab) {
-  state.demandAiTab = tab;
-  navigate('demandai');
+  const map = { submit: 'quick', meeting: 'meeting', history: 'history', ai: 'quick', quick: 'quick' };
+  state.submitTab = map[tab] || 'quick';
+  navigate('submit');
 }
 
 function setSubmitTab(tab) {
@@ -463,22 +559,17 @@ function setSubmitTab(tab) {
 }
 
 function usesDemandAiCenter() {
-  return isLeaderUser();
+  return false;
 }
 
 function submitHubView() {
-  return usesDemandAiCenter() ? 'demandai' : 'submit';
+  return 'submit';
 }
 
 async function navigateSubmitHub(tab) {
-  if (usesDemandAiCenter()) {
-    state.demandAiTab = tab;
-    await navigate('demandai');
-  } else {
-    const map = { submit: 'quick', meeting: 'meeting', history: 'history' };
-    state.submitTab = map[tab] || tab;
-    await navigate('submit');
-  }
+  const map = { submit: 'quick', meeting: 'meeting', history: 'history', quick: 'quick' };
+  state.submitTab = map[tab] || tab || 'quick';
+  await navigate('submit');
 }
 
 function toggleProfileShowAll() {
@@ -956,8 +1047,37 @@ function lastProgressLabel(item) {
 
 function taskStaleDays(item) {
   const latest = (item.progress_updates || [])[0];
-  if (!latest?.date) return 99;
+  if (!latest?.date) return null;
   return Math.floor((Date.now() - new Date(`${latest.date}T12:00:00`).getTime()) / 86400000);
+}
+
+function renderTaskPulseBadge({ todayOk, staleDays }) {
+  if (todayOk) return '<span class="gk-tv-badge gk-tv-badge--ok">今日已报</span>';
+  if (staleDays == null) return '<span class="gk-tv-badge gk-tv-badge--no">今日未报</span>';
+  if (staleDays >= 3) return `<span class="gk-tv-badge gk-tv-badge--stale">${staleDays}日未动</span>`;
+  return '<span class="gk-tv-badge gk-tv-badge--no">今日未报</span>';
+}
+
+function renderTaskPulseRows(insight) {
+  if (!insight.tasks.length) return '<div class="empty-state">暂无执行中任务</div>';
+  return insight.tasks.map(({ item, pulse, lastLabel, todayOk, staleDays }) => {
+    const pulseHtml = pulse.map(b =>
+      `<span class="${b.has ? (b.isToday ? 'today' : 'on') : ''}"></span>`
+    ).join('');
+    const pri = priorityMeta(item.priority);
+    const people = [
+      item.created_by ? `提出 ${item.created_by}` : null,
+      item.assignee ? `执行 ${item.assignee}` : null,
+    ].filter(Boolean).join(' · ') || '未指定人员';
+    return `<div class="gk-tv-item" data-item-id="${item.id}" onclick="showTaskDetailView('${item.id}')">
+      <div class="gk-tv-info">
+        <div class="gk-tv-title">${item.req_no ? `<span class="req-no-tag req-no-tag--sm">${esc(item.req_no)}</span> ` : ''}${esc(item.title)}</div>
+        <div class="gk-tv-sub">${esc(people)} · ${pri.short} · 最近：${esc(lastLabel)}</div>
+      </div>
+      <div class="gk-tv-pulse" title="过去7天每日进展">${pulseHtml}</div>
+      ${renderTaskPulseBadge({ todayOk, staleDays })}
+    </div>`;
+  }).join('');
 }
 
 function buildFlowPieGradient(stats) {
@@ -1093,28 +1213,14 @@ function renderExecutingInsightPanel(insight) {
     </div>`;
   }).join('') : '<div class="empty-state">暂无执行中人员</div>';
 
-  const taskRows = insight.tasks.length ? insight.tasks.map(({ item, pulse, lastLabel, todayOk, staleDays }) => {
-    const badge = todayOk ? '<span class="gk-tv-badge gk-tv-badge--ok">今日已报</span>'
-      : staleDays >= 3 ? `<span class="gk-tv-badge gk-tv-badge--stale">${staleDays}日未动</span>`
-      : '<span class="gk-tv-badge gk-tv-badge--no">今日未报</span>';
-    const pulseHtml = pulse.map(b =>
-      `<span class="${b.has ? (b.isToday ? 'today' : 'on') : ''}"></span>`
-    ).join('');
-    const pri = priorityMeta(item.priority);
-    return `<div class="gk-tv-item" onclick="showTaskDetailView('${item.id}')">
-      <div class="gk-tv-info">
-        <div class="gk-tv-title">${item.req_no ? `<span class="req-no-tag req-no-tag--sm">${esc(item.req_no)}</span> ` : ''}${esc(item.title)}</div>
-        <div class="gk-tv-sub">${esc(item.assignee || '-')} · ${pri.short} · 最近：${lastLabel}</div>
-      </div>
-      <div class="gk-tv-pulse" title="过去7天每日进展">${pulseHtml}</div>
-      ${badge}
-    </div>`;
-  }).join('') : '<div class="empty-state">暂无执行中任务</div>';
+  const taskRows = renderTaskPulseRows(insight);
+  const liveTs = state.globalKanbanUpdatedAt || state.liveSyncUpdatedAt || new Date();
+  const liveLabel = liveTs.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   return `<div id="gk-exec-insight" class="dashboard-panel gk-panel gk-viz-exec">
     <div class="gk-panel-head">
       <span class="section-title">⚡ 执行中任务洞察</span>
-      <span class="gk-panel-sub">${insight.runningCount} 项进行中</span>
+      <span class="gk-panel-sub">${insight.runningCount} 项进行中 · <span id="gk-exec-live-meta" class="gk-exec-live-meta">实时 ${liveLabel}</span></span>
     </div>
     <div class="gk-exec-summary">
       <div class="gk-exec-chip gk-exec-chip--run"><strong>${insight.runningCount}</strong><span>执行中</span></div>
@@ -1128,16 +1234,16 @@ function renderExecutingInsightPanel(insight) {
       </div>
       <div class="gk-rate-desc">
         <p>今日已报 <strong>${insight.reportedCount}</strong> · 未报 <strong>${insight.notReportedCount}</strong></p>
-        <p class="gk-rate-hint">脉搏图：蓝=有进展 · 绿=今日已报 · 灰=无进展</p>
+        <p class="gk-rate-hint">脉搏图：蓝=有进展 · 绿=今日已报 · 灰=无进展 · 列表每 ${Math.round(LIVE_SYNC_MS / 1000)} 秒自动刷新</p>
       </div>
     </div>
     <div class="gk-viz-split">
       <div class="gk-viz-col">
         <div class="gk-viz-col-title">人员活跃（7日 + 今日）</div>
-        <div class="gk-ph-list">${personRows}</div>
+        <div class="gk-ph-list" id="gk-ph-list">${personRows}</div>
       </div>
       <div class="gk-viz-col">
-        <div class="gk-viz-col-title">任务脉搏（近7日）</div>
+        <div class="gk-viz-col-title">任务脉搏（近7日） <span class="gk-tv-live"><span class="gk-live-dot"></span>实时</span></div>
         <div class="gk-tv-list" id="gk-tv-list">${taskRows}</div>
       </div>
     </div>
@@ -1333,10 +1439,42 @@ function updateDashboardLivePanels() {
   const pie = document.getElementById('gk-viz-pie');
   if (pie) pie.outerHTML = renderFlowPiePanel(stats);
 
+  // 任务脉搏 / 人员活跃：就地刷新并保持滚动位置，避免打断观察
+  const tvList = document.getElementById('gk-tv-list');
+  const phList = document.getElementById('gk-ph-list');
+  const tvScroll = tvList?.scrollTop || 0;
+  const phScroll = phList?.scrollTop || 0;
   const exec = document.getElementById('gk-exec-insight');
-  if (exec) exec.outerHTML = renderExecutingInsightPanel(execInsight);
+  if (exec && tvList && phList) {
+    const html = renderExecutingInsightPanel(execInsight);
+    const wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    const next = wrap.firstElementChild;
+    const nextTv = next?.querySelector('#gk-tv-list');
+    const nextPh = next?.querySelector('#gk-ph-list');
+    const nextSummary = next?.querySelector('.gk-exec-summary');
+    const nextRate = next?.querySelector('.gk-rate-row');
+    const nextHead = next?.querySelector('.gk-panel-sub');
+    if (nextTv) {
+      tvList.innerHTML = nextTv.innerHTML;
+      tvList.scrollTop = tvScroll;
+      tvList.classList.add('gk-tv-list--flash');
+      setTimeout(() => tvList.classList.remove('gk-tv-list--flash'), 450);
+    }
+    if (nextPh) {
+      phList.innerHTML = nextPh.innerHTML;
+      phList.scrollTop = phScroll;
+    }
+    const summary = exec.querySelector('.gk-exec-summary');
+    if (summary && nextSummary) summary.innerHTML = nextSummary.innerHTML;
+    const rate = exec.querySelector('.gk-rate-row');
+    if (rate && nextRate) rate.innerHTML = nextRate.innerHTML;
+    const head = exec.querySelector('.gk-panel-sub');
+    if (head && nextHead) head.innerHTML = nextHead.innerHTML;
+  } else if (exec) {
+    exec.outerHTML = renderExecutingInsightPanel(execInsight);
+  }
 
-  const topInsight = state.insights.find(i => i.severity === 'warning') || state.insights[0];
   refreshActivityFeedDom();
 
   const actionSub = document.querySelector('#gk-action-panel .gk-panel-sub');
@@ -1572,21 +1710,8 @@ function renderAcceptance() {
 }
 
 function renderDemandAI() {
-  const tab = state.demandAiTab || 'submit';
-  const panel = {
-    submit: renderSubmitQuickPanel(),
-    meeting: renderSubmitMeetingPanel(),
-    history: renderSubmitHistory(),
-    ai: renderAI(),
-  }[tab] || renderSubmitQuickPanel();
-  return `
-    <div class="page-tabs demandai-tabs">
-      <button type="button" class="page-tab ${tab === 'submit' ? 'active' : ''}" onclick="setDemandAiTab('submit')">📤 新建需求</button>
-      <button type="button" class="page-tab ${tab === 'meeting' ? 'active' : ''}" onclick="setDemandAiTab('meeting')">🎙️ 会议/语音</button>
-      <button type="button" class="page-tab ${tab === 'history' ? 'active' : ''}" onclick="setDemandAiTab('history')">📋 提交记录</button>
-      <button type="button" class="page-tab ${tab === 'ai' ? 'active' : ''}" onclick="setDemandAiTab('ai')">🤖 AI 工具</button>
-    </div>
-    <div class="page-tab-panel">${panel}</div>`;
+  // 全角色统一为「提交需求」三页签（快速提交 / 会议语音 / 提交记录）
+  return renderSubmit();
 }
 
 function renderAI() {
@@ -1774,6 +1899,7 @@ function renderMyWork() {
   };
 
   return `
+    ${renderAlertBanner('mywork')}
     <div class="work-summary-bar card">
       ${renderWorkbenchSummaryChip('primary', '待办', primaryAll.length)}
       ${renderWorkbenchSummaryChip('assist', '协助', assistAll.length)}
@@ -1795,29 +1921,31 @@ function renderSubmitFormFields() {
   const executors = state.users.filter(u => (u.capabilities || []).includes('executor') && !(u.capabilities || []).includes('reviewer'));
   return `
     <div class="submit-step card">
-      <div class="form-group"><label>需求标题</label><input id="reqTitle" placeholder="简要描述你的需求"></div>
-      <div class="form-group"><label>应用场景</label><textarea id="reqScene" rows="3" placeholder="描述应用场景和业务目标..."></textarea></div>
+      <div class="form-group"><label>需求标题</label><input id="reqTitle" placeholder="简要描述您的需求"></div>
+      <div class="form-group"><label>应用场景</label><textarea id="reqScene" rows="3" placeholder="描述应用场景和业务目标…"></textarea></div>
       <div class="form-group"><label>验收目标</label><textarea id="reqAccept" rows="3" placeholder="期望达成什么效果？"></textarea></div>
       <div class="form-group"><label>期望时间</label><input id="reqDeadline" type="date"></div>
-      <div class="section-title" style="font-size:0.85rem;margin:0.75rem 0 0.5rem">人员分配</div>
+      <div class="submit-people-title">人员分配</div>
       <div class="form-group"><label>审核人</label>
         <select id="reqReviewer" style="width:100%;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
           <option value="">请选择审核人</option>
           ${reviewers.map(r => `<option value="${esc(r.name)}">${esc(r.name)} (${esc(userDeptLabel(r))})</option>`).join('')}
         </select>
       </div>
-      <div class="form-group"><label>工作需要人数</label>
-        <select id="reqTeamSize" onchange="updateExecutorLimit()" style="width:120px;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
-          <option value="1">1 人</option><option value="2" selected>2 人</option><option value="3">3 人</option><option value="4">4 人</option><option value="5">5 人</option>
-        </select>
-      </div>
-      <div class="form-group"><label>主执行人员（多选，第一位为主执行）</label>
-        <select id="reqExecutors" multiple size="5" style="width:100%;padding:0.35rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
-          ${executors.map(e => `<option value="${esc(e.name)}">${esc(e.name)} (${esc(userDeptLabel(e))})</option>`).join('')}
-        </select>
+      <div class="form-group">
+        <label>执行人员 <span id="reqExecutorHint" class="req-executor-hint">请勾选执行人员 · 第一位为主执行</span></label>
+        <div id="reqExecutors" class="req-executor-list">
+          ${executors.map(e => `
+            <label class="req-executor-option">
+              <input type="checkbox" value="${esc(e.name)}" onchange="onExecutorCheck()">
+              <span class="req-executor-name">${esc(e.name)} <em>(${esc(userDeptLabel(e))})</em></span>
+              <span class="req-executor-role" hidden>主执行</span>
+            </label>`).join('')}
+        </div>
+        <p class="req-executor-tip">按勾选顺序：第 1 人为主执行，其后为协助；人数由勾选自动确定。</p>
       </div>
       <button class="btn btn-primary" onclick="submitRequirement()">📤 提交需求</button>
-      <p style="font-size:0.72rem;color:var(--muted);margin-top:0.5rem">提交后自动进入执行 · ${ai.llm ? ai.llm.provider : '未配置 LLM'}</p>
+      <p style="font-size:0.72rem;color:var(--muted);margin-top:0.5rem">提交后自动进入执行，并通知审核人与执行人员 · ${ai.llm ? ai.llm.provider : '未配置 LLM'}</p>
     </div>`;
 }
 
@@ -1902,7 +2030,7 @@ function renderSubmit() {
   const tab = state.submitTab || 'quick';
   return `
     <div class="page-tabs">
-      <button type="button" class="page-tab ${tab === 'quick' ? 'active' : ''}" onclick="setSubmitTab('quick')">📝 快速提交</button>
+      <button type="button" class="page-tab ${tab === 'quick' ? 'active' : ''}" onclick="setSubmitTab('quick')">⚡ 快速提交</button>
       <button type="button" class="page-tab ${tab === 'meeting' ? 'active' : ''}" onclick="setSubmitTab('meeting')">🎙️ 会议/语音</button>
       <button type="button" class="page-tab ${tab === 'history' ? 'active' : ''}" onclick="setSubmitTab('history')">📋 提交记录</button>
     </div>
@@ -1932,7 +2060,7 @@ function renderReview() {
       </div>
       <h3>${esc(i.title)}</h3>
       <p style="color:var(--muted);font-size:0.85rem">${esc(i.description || '')}</p>
-      <p style="font-size:0.82rem">提交人: <strong>${esc(i.created_by || '未知')}</strong> · ${taskPeopleHtml(i)}</p>
+      <p style="font-size:0.82rem">${taskPeopleHtml(i)}</p>
       ${i.blocked_reason ? `<p style="color:var(--danger);font-size:0.82rem">${BLOCKER_ICONS[i.blocker_type] || '🚧'} ${esc(i.blocked_reason)}</p>` : ''}
       ${updates.length ? `<div style="font-size:0.82rem;max-height:80px;overflow-y:auto;margin:0.5rem 0">
         ${updates.map(u => `<div style="padding:0.2rem 0;border-bottom:1px solid var(--border)"><strong>${u.date}</strong> ${esc(u.user)}: ${esc(u.description?.slice(0, 60) || '')}</div>`).join('')}
@@ -2407,6 +2535,7 @@ function renderProfile() {
     : (showExecutorInsight ? renderExecutorProfileInsight(u, projects) : '');
 
   return `
+    ${isSelf ? renderAlertBanner('profile') : ''}
     <div class="profile-header card">
       <div class="profile-avatar-lg">${(u?.name || '?').slice(0,1)}</div>
       <div>
@@ -2758,13 +2887,16 @@ async function processAiDocument(file) {
 // ── Actions ──
 async function navigate(view) {
   if (view === 'voice') view = 'submit';
+  if (view === 'demandai' || view === 'ai') {
+    if (state.demandAiTab === 'meeting') state.submitTab = 'meeting';
+    else if (state.demandAiTab === 'history') state.submitTab = 'history';
+    else state.submitTab = state.submitTab || 'quick';
+    view = 'submit';
+  }
   if (view === 'kanban' || view === 'review' || view === 'acceptance') {
     if (view === 'review') state.kanbanFilter = { flow: 'in_progress', reviewer: '', executor: '' };
     else if (view === 'acceptance') state.kanbanFilter = { flow: 'done', reviewer: '', executor: '' };
     view = 'taskcenter';
-  } else if (view === 'ai') {
-    state.demandAiTab = 'ai';
-    view = 'demandai';
   }
 
   state.currentView = view;
@@ -2792,16 +2924,16 @@ async function navigate(view) {
     state.userReviewProjects = await api(`/users/${uid}/review-projects`);
   }
   const renderers = {
-    taskcenter: renderTaskCenter, dashboard: renderDashboard, demandai: renderDemandAI,
+    taskcenter: renderTaskCenter, dashboard: renderDashboard, demandai: renderSubmit,
     mywork: renderMyWork, submit: renderSubmit, profile: renderProfile, team: renderTeam,
-    kanban: renderTaskCenter, review: renderTaskCenter, acceptance: renderTaskCenter, ai: renderDemandAI,
+    kanban: renderTaskCenter, review: renderTaskCenter, acceptance: renderTaskCenter, ai: renderSubmit,
   };
   document.getElementById('content').innerHTML = renderers[view] ? renderers[view]() : '<div class="empty-state">页面不存在</div>';
   if (view === 'dashboard' && isReviewerUser()) startLiveSyncPolling();
   else if (shouldLiveSyncView(view)) startLiveSyncPolling();
   else stopLiveSyncPolling();
   if (view === 'taskcenter' && state.kanbanViewMode === 'board') initDragDrop();
-  if (view === 'submit' || (view === 'demandai' && ['submit', 'meeting'].includes(state.demandAiTab))) initSubmitPage();
+  if (view === 'submit') initSubmitPage();
 }
 
 function flowStatusBody(category, extra = {}) {
@@ -3278,6 +3410,7 @@ function toggleMeetingRecord() {
 function initSubmitPage() {
   document.getElementById('meetVoiceInput')?.addEventListener('change', e => { if (e.target.files[0]) uploadMeetingAudio(e.target.files[0]); });
   document.getElementById('meetDocInput')?.addEventListener('change', e => { if (e.target.files[0]) uploadMeetingDoc(e.target.files[0]); });
+  refreshExecutorSelectionUI();
 }
 
 async function sendSubmitChat() {
@@ -3311,15 +3444,13 @@ async function submitRequirement() {
   const accept = document.getElementById('reqAccept').value;
   const deadline = document.getElementById('reqDeadline').value;
   const reviewer = document.getElementById('reqReviewer')?.value;
-  const teamSize = Number(document.getElementById('reqTeamSize')?.value) || 1;
-  const execEl = document.getElementById('reqExecutors');
-  const selected = execEl ? Array.from(execEl.selectedOptions).map(o => o.value) : [];
+  const selected = getSelectedExecutors();
   if (!title.trim()) return toast('请填写需求标题', 'error');
   if (!reviewer) return toast('请选择审核人', 'error');
-  if (!selected.length) return toast('请选择至少一名执行人员', 'error');
-  if (selected.length > teamSize) return toast(`执行人员不能超过 ${teamSize} 人`, 'error');
+  if (!selected.length) return toast('请勾选至少一名执行人员', 'error');
   const assignee = selected[0];
   const assistants = selected.slice(1);
+  const teamSize = selected.length;
   const meetingNote = state.currentMeetingId ? `\n\n会议记录ID: ${state.currentMeetingId}` : '';
   const item = await api('/items', { method: 'POST', body: {
     type: 'story',
@@ -3328,7 +3459,7 @@ async function submitRequirement() {
     reviewer, team_size: teamSize, assignee, assistants,
   }});
   if (item.status === 'in_progress') {
-    toast(`✅ 需求 ${item.req_no || ''} 已派发，${assignee} 可在工作台查看`);
+    toast(`✅ 需求 ${item.req_no || ''} 已派发并已通知相关人员`);
   } else {
     toast(`需求 ${item.req_no || ''} 提交异常（状态: ${item.status}），请重启服务后重试`, 'error');
   }
@@ -3336,15 +3467,52 @@ async function submitRequirement() {
   await navigateSubmitHub('history');
 }
 
-function updateExecutorLimit() {
-  const teamSize = Number(document.getElementById('reqTeamSize')?.value) || 1;
-  const execEl = document.getElementById('reqExecutors');
-  if (!execEl) return;
-  const selected = Array.from(execEl.selectedOptions);
-  if (selected.length > teamSize) {
-    selected.slice(teamSize).forEach(o => { o.selected = false; });
-    toast(`已限制为 ${teamSize} 人`, 'error');
+function getSelectedExecutors() {
+  const box = document.getElementById('reqExecutors');
+  if (!box) return [];
+  return Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map(el => el.value);
+}
+
+function refreshExecutorSelectionUI() {
+  const box = document.getElementById('reqExecutors');
+  const hint = document.getElementById('reqExecutorHint');
+  const checked = box ? Array.from(box.querySelectorAll('input[type="checkbox"]:checked')) : [];
+  checked.forEach((el, idx) => {
+    const label = el.closest('.req-executor-option');
+    label?.classList.toggle('is-primary', idx === 0);
+    label?.classList.toggle('is-checked', true);
+    const role = label?.querySelector('.req-executor-role');
+    if (role) {
+      role.hidden = false;
+      role.textContent = idx === 0 ? '主执行' : `协助${idx}`;
+    }
+  });
+  box?.querySelectorAll('input[type="checkbox"]:not(:checked)').forEach(el => {
+    const label = el.closest('.req-executor-option');
+    label?.classList.remove('is-primary', 'is-checked');
+    const role = label?.querySelector('.req-executor-role');
+    if (role) role.hidden = true;
+  });
+  if (hint) {
+    const n = checked.length;
+    hint.textContent = n
+      ? `已选 ${n} 人 · 第一位为主执行`
+      : '请勾选执行人员 · 第一位为主执行';
+    hint.classList.toggle('is-ok', n > 0);
+    hint.classList.toggle('is-warn', n === 0);
   }
+}
+
+function onExecutorCheck() {
+  refreshExecutorSelectionUI();
+}
+
+function onTeamSizeChange() {
+  refreshExecutorSelectionUI();
+}
+
+function updateExecutorLimit() {
+  refreshExecutorSelectionUI();
 }
 
 async function completeTask(id) {
