@@ -1,6 +1,6 @@
 {
   "name": "ai-agile-platform",
-  "version": "5.1.0",
+  "version": "5.2.0",
   "description": "FDE管理平台 v2 - 任务中心/按角色导航",
   "main": "server/index.js",
   "scripts": {

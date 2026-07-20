@@ -67,6 +67,11 @@ function isLeaderUser() {
   return isReviewerUser();
 }
 
+function isMyReviewTask(item, userName = state.user?.name) {
+  if (!item || !userName || !isLeaderUser()) return false;
+  return item.reviewer === userName;
+}
+
 function leaderNavConfig(user = state.user) {
   const caps = user?.capabilities || [];
   if (!caps.includes('reviewer') && user?.role !== 'admin') return null;
@@ -472,17 +477,18 @@ function flowListActionsHtml(item) {
   const parts = [
     `<button type="button" class="btn btn-ghost btn-sm flow-list-action" title="查看详情" onclick="event.stopPropagation();showTaskDetailView('${item.id}')">详</button>`,
   ];
-  if (!canModifyKanban()) return `<div class="flow-list-actions">${parts.join('')}</div>`;
-  const cat = flowCategory(item);
-  if (cat === 'in_progress') {
-    parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--danger" title="终止执行" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">停</button>`);
-    parts.push(`<button type="button" class="btn btn-primary btn-sm flow-list-action" title="二次分配" onclick="event.stopPropagation();showReassignModal('${item.id}')">配</button>`);
-  }
-  if (cat === 'blocked') {
-    parts.push(`<button type="button" class="btn btn-primary btn-sm flow-list-action" title="二次分配" onclick="event.stopPropagation();showReassignModal('${item.id}')">配</button>`);
-  }
-  if (cat === 'done' || cat === 'terminated') {
-    parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--warn" title="退回执行中" onclick="event.stopPropagation();reviewerRevoke('${item.id}')">退</button>`);
+  if (isMyReviewTask(item)) {
+    const cat = flowCategory(item);
+    if (cat === 'in_progress') {
+      parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--danger" title="终止执行" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">停</button>`);
+      parts.push(`<button type="button" class="btn btn-primary btn-sm flow-list-action" title="二次分配" onclick="event.stopPropagation();showReassignModal('${item.id}')">配</button>`);
+    }
+    if (cat === 'blocked') {
+      parts.push(`<button type="button" class="btn btn-primary btn-sm flow-list-action" title="二次分配" onclick="event.stopPropagation();showReassignModal('${item.id}')">配</button>`);
+    }
+    if (cat === 'done' || cat === 'terminated') {
+      parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--warn" title="退回执行中" onclick="event.stopPropagation();reviewerRevoke('${item.id}')">退</button>`);
+    }
   }
   if (isAdminUser()) {
     parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--danger" title="删除任务" onclick="event.stopPropagation();deleteItemQuick('${item.id}')">删</button>`);
@@ -491,7 +497,7 @@ function flowListActionsHtml(item) {
 }
 
 function leaderActionsHtml(item) {
-  if (!isLeaderUser()) return '';
+  if (!isMyReviewTask(item)) return '';
   const cat = flowCategory(item);
   if (cat === 'in_progress') {
     return `<button type="button" class="btn btn-ghost btn-sm task-card-btn task-card-btn--danger" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">⏹ 终止</button><button type="button" class="btn btn-primary btn-sm task-card-btn" onclick="event.stopPropagation();showReassignModal('${item.id}')">🔄 二次分配</button>`;
@@ -519,7 +525,7 @@ function renderTaskCard(item) {
   ].filter(Boolean).join('');
   const actions = leaderActionsHtml(item);
   const footer = taskCardFooterHtml(item);
-  const checkBadge = isLeaderUser() ? checkCountBadgeHtml(item.check_count, { labeled: true }) : '';
+  const checkBadge = isMyReviewTask(item) ? checkCountBadgeHtml(item.check_count, { labeled: true }) : '';
 
   return `<div class="task-card ${item.status === 'blocked' ? 'blocked' : ''} ${isReviewer ? '' : 'readonly'}" draggable="${draggable}" data-id="${item.id}">
     <div class="task-card-top">
@@ -2043,9 +2049,7 @@ function renderSubmit() {
 }
 
 function renderReview() {
-  const myReview = isLeaderUser()
-    ? state.items.filter(i => i.reviewer || i.req_no)
-    : state.items.filter(i => i.reviewer === state.user?.name);
+  const myReview = state.items.filter(i => i.reviewer === state.user?.name);
   const active = myReview.filter(i => flowCategory(i) === 'in_progress');
   const blocked = myReview.filter(i => i.status === 'blocked');
   const completed = myReview.filter(i => flowCategory(i) === 'done');
@@ -2067,17 +2071,17 @@ function renderReview() {
         ${updates.map(u => `<div style="padding:0.2rem 0;border-bottom:1px solid var(--border)"><strong>${u.date}</strong> ${esc(u.user)}: ${esc(u.description?.slice(0, 60) || '')}</div>`).join('')}
       </div>` : ''}
       <div class="accept-actions" style="flex-wrap:wrap;gap:0.5rem">
-        ${mode === 'active' && isLeaderUser() ? `
+        ${mode === 'active' && isMyReviewTask(i) ? `
           <button class="btn btn-ghost btn-sm" onclick="reviewerTerminate('${i.id}')" style="border-color:var(--danger);color:var(--danger)">⏹ 终止</button>
           <button class="btn btn-primary btn-sm" onclick="showReassignModal('${i.id}')">🔄 二次分配</button>
         ` : ''}
-        ${mode === 'blocked' && isLeaderUser() ? `
+        ${mode === 'blocked' && isMyReviewTask(i) ? `
           <button class="btn btn-primary btn-sm" onclick="showReassignModal('${i.id}')">🔄 二次分配</button>
         ` : ''}
-        ${mode === 'completed' && isLeaderUser() ? `
+        ${mode === 'completed' && isMyReviewTask(i) ? `
           <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:${STAR_GOLD};color:#6b5410">↩ 退回执行中</button>
         ` : ''}
-        ${mode === 'terminated' && isLeaderUser() ? `
+        ${mode === 'terminated' && isMyReviewTask(i) ? `
           <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:${STAR_GOLD};color:#6b5410">↩ 退回执行中</button>
         ` : ''}
       </div>
@@ -2111,7 +2115,7 @@ function renderProfileProjectRow(pr) {
   const meta = profileProjectStatusMeta(pr);
   const end = taskEndTime(pr);
   const title = displayTaskTitle(pr.task_name || '');
-  const showChecks = isLeaderUser();
+  const showChecks = isMyReviewTask({ reviewer: pr.reviewer });
   return `<tr class="profile-task-row" onclick="showTaskDetailView('${pr.item_id}')">
     <td class="task-col-no">${pr.task_no !== '-' ? `<span class="req-no-tag req-no-tag--sm">${esc(pr.task_no)}</span>` : '<span class="flow-list-empty">-</span>'}</td>
     <td class="task-col-title" title="${esc(title)}"><span class="cell-title-text">${esc(title)}</span></td>
@@ -2133,7 +2137,8 @@ function renderProfileProjectTable(projects, { title, exportKind, emptyText, lim
   const sorted = sortByPriority(projects);
   const rows = showAll ? sorted : sorted.slice(0, limit || total);
   const count = rows.length;
-  const showChecks = isLeaderUser();
+  const isSelf = (state.profileUserId || state.user?.id) === state.user?.id;
+  const showChecks = exportKind === 'review' && isSelf && isLeaderUser();
   const colSpan = showChecks ? 8 : 7;
   return `<div class="card profile-task-card">
     <div class="profile-task-head">
@@ -2159,7 +2164,7 @@ function renderProfileProjectTable(projects, { title, exportKind, emptyText, lim
   </div>`;
 }
 
-function profileTaskExportRow(pr) {
+function profileTaskExportRow(pr, { includeChecks = false } = {}) {
   const meta = profileProjectStatusMeta(pr);
   const end = taskEndTime(pr);
   const base = [
@@ -2168,7 +2173,7 @@ function profileTaskExportRow(pr) {
     meta.label,
     priorityMeta(pr.priority).label,
   ];
-  if (isLeaderUser()) base.push(Number(pr.check_count) || 0);
+  if (includeChecks) base.push(Number(pr.check_count) || 0);
   base.push(
     pr.proposer || '',
     pr.reviewer || '',
@@ -2195,10 +2200,11 @@ function exportProfileTaskList(kind) {
     toast('暂无数据可导出', 'error');
     return;
   }
-  const headers = isLeaderUser()
+  const includeChecks = kind === 'review' && (state.profileUserId || state.user?.id) === state.user?.id && isLeaderUser();
+  const headers = includeChecks
     ? ['任务编号', '任务名称', '状态', '优先级', '检查次数', '需求提出人', '审核人', '主执行人', '其他执行人', '开始时间', '结束时间']
     : ['任务编号', '任务名称', '状态', '优先级', '需求提出人', '审核人', '主执行人', '其他执行人', '开始时间', '结束时间'];
-  const csv = exportCsvRows(headers, rows.map(profileTaskExportRow));
+  const csv = exportCsvRows(headers, rows.map(r => profileTaskExportRow(r, { includeChecks })));
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const owner = state.profileUser?.name || state.user?.name;
   const category = kind === 'review' ? '参与审核任务' : '参与任务';
@@ -2276,7 +2282,7 @@ function showTaskDetailView(id) {
   const meta = projectStatusMeta(item);
   const end = taskEndTime(item);
   const checks = Number(item.check_count) || 0;
-  const checkMeta = isLeaderUser()
+  const checkMeta = isMyReviewTask(item)
     ? `<span class="check-count-badge" title="本任务审核人查看次数">查 ${checks}</span>`
     : '';
   showModal(`${item.req_no ? esc(item.req_no) + ' · ' : ''}${esc(item.title)}`, `
@@ -2308,10 +2314,7 @@ function showTaskDetailView(id) {
 
 async function recordTaskCheckView(id) {
   const item = state.items.find(i => i.id === id);
-  const name = state.user?.name;
-  if (!item || !name) return;
-  // 仅本任务审核人查看时累计
-  if (item.reviewer !== name) return;
+  if (!item || !isMyReviewTask(item)) return;
   try {
     const updated = await api(`/items/${id}/check-view`, { method: 'POST' });
     if (updated?.id) {
@@ -3056,33 +3059,74 @@ function initDragDrop() {
 function showReassignModal(id) {
   const item = state.items.find(i => i.id === id);
   if (!item) return;
+  if (!isMyReviewTask(item)) return toast('只能对自己审核的任务进行二次分配', 'error');
   const executors = state.users.filter(u => (u.capabilities || []).includes('executor') && !(u.capabilities || []).includes('reviewer'));
+  const selected = new Set([item.assignee, ...(item.assistants || [])].filter(Boolean));
   showModal('二次分配 · ' + item.title, `
     <p style="color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem">当前主执行: <strong>${esc(item.assignee || '未分配')}</strong>${item.blocked_reason ? `<br>阻塞原因: ${esc(item.blocked_reason)}` : ''}</p>
-    <div class="form-group"><label>新主执行人</label>
-      <select id="reassignPrimary" style="width:100%;padding:0.45rem 0.6rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
-        <option value="">请选择</option>
-        ${executors.map(e => `<option value="${esc(e.name)}" ${e.name === item.assignee ? 'selected' : ''}>${esc(e.name)} (${esc(userDeptLabel(e))})</option>`).join('')}
-      </select>
-    </div>
-    <div class="form-group"><label>协助人员（可多选）</label>
-      <select id="reassignAssist" multiple size="4" style="width:100%;padding:0.35rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
-        ${executors.map(e => `<option value="${esc(e.name)}" ${(item.assistants || []).includes(e.name) ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}
-      </select>
+    <div class="form-group">
+      <label>执行人员 <span id="reassignExecutorHint" class="req-executor-hint">请勾选执行人员 · 第一位为主执行</span></label>
+      <div id="reassignExecutors" class="req-executor-list">
+        ${executors.map(e => `
+          <label class="req-executor-option">
+            <input type="checkbox" value="${esc(e.name)}" ${selected.has(e.name) ? 'checked' : ''} onchange="refreshReassignExecutorUI()">
+            <span class="req-executor-name">${esc(e.name)} <em>(${esc(userDeptLabel(e))})</em></span>
+            <span class="req-executor-role" hidden>主执行</span>
+          </label>`).join('')}
+      </div>
+      <p class="req-executor-tip">按勾选顺序：第 1 人为主执行，其后为协助；人数由勾选自动确定。</p>
     </div>
     <div class="form-group"><label>备注（可选）</label><input id="reassignComment" placeholder="分配说明..."></div>
     <button class="btn btn-primary" style="width:100%" onclick="reviewerReassign('${id}')">确认二次分配</button>
   `);
+  setTimeout(refreshReassignExecutorUI, 0);
+}
+
+function getSelectedReassignExecutors() {
+  const box = document.getElementById('reassignExecutors');
+  if (!box) return [];
+  return Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map(el => el.value);
+}
+
+function refreshReassignExecutorUI() {
+  const box = document.getElementById('reassignExecutors');
+  const hint = document.getElementById('reassignExecutorHint');
+  const checked = box ? Array.from(box.querySelectorAll('input[type="checkbox"]:checked')) : [];
+  checked.forEach((el, idx) => {
+    const label = el.closest('.req-executor-option');
+    label?.classList.toggle('is-primary', idx === 0);
+    label?.classList.toggle('is-checked', true);
+    const role = label?.querySelector('.req-executor-role');
+    if (role) {
+      role.hidden = false;
+      role.textContent = idx === 0 ? '主执行' : `协助${idx}`;
+    }
+  });
+  box?.querySelectorAll('input[type="checkbox"]:not(:checked)').forEach(el => {
+    const label = el.closest('.req-executor-option');
+    label?.classList.remove('is-primary', 'is-checked');
+    const role = label?.querySelector('.req-executor-role');
+    if (role) role.hidden = true;
+  });
+  if (hint) {
+    const n = checked.length;
+    hint.textContent = n
+      ? `已选 ${n} 人 · 第一位为主执行`
+      : '请勾选执行人员 · 第一位为主执行';
+    hint.classList.toggle('is-ok', n > 0);
+    hint.classList.toggle('is-warn', n === 0);
+  }
 }
 
 async function reviewerReassign(id) {
-  const assignee = document.getElementById('reassignPrimary')?.value;
-  const assistEl = document.getElementById('reassignAssist');
-  const assistants = assistEl ? Array.from(assistEl.selectedOptions).map(o => o.value).filter(v => v !== assignee) : [];
+  const selected = getSelectedReassignExecutors();
   const comment = document.getElementById('reassignComment')?.value || '';
-  if (!assignee) return toast('请选择主执行人', 'error');
+  if (!selected.length) return toast('请勾选至少一名执行人员', 'error');
+  const assignee = selected[0];
+  const assistants = selected.slice(1);
+  const teamSize = selected.length;
   await leaderAction(async () => {
-    await api(`/items/${id}/reviewer-reassign`, { method: 'POST', body: { assignee, assistants, comment } });
+    await api(`/items/${id}/reviewer-reassign`, { method: 'POST', body: { assignee, assistants, team_size: teamSize, comment } });
     closeModal();
   }, '已二次分配并通知相关人员');
 }
@@ -3122,7 +3166,7 @@ function showItemDetail(id) {
   const isAdmin = state.user?.role === 'admin';
   const canEdit = isReviewerUser();
   const canProgress = item.assignee === state.user?.name || (item.assistants || []).includes(state.user?.name);
-  const checkMeta = isLeaderUser()
+  const checkMeta = isMyReviewTask(item)
     ? ` ${checkCountBadgeHtml(item.check_count, { labeled: true })}`
     : '';
   showModal(item.title, `
@@ -3155,14 +3199,14 @@ function showItemDetail(id) {
       <button class="btn btn-ghost btn-sm" style="margin:0.5rem 0" onclick="submitProgress('${id}', true)">📤 提交进展</button>
       ${ACTIVE_STATUSES.includes(item.status) || item.status === 'blocked' ? `<button class="btn btn-success btn-sm" style="margin:0.5rem 0.5rem" onclick="completeTask('${id}')">✅ 任务完成</button>` : ''}` : ''}
     ${canEdit ? `<button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="updateItem('${id}')">保存</button>` : ''}
-    ${isLeaderUser() && flowCategory(item) === 'in_progress' ? `
+    ${isMyReviewTask(item) && flowCategory(item) === 'in_progress' ? `
       <button class="btn btn-ghost" style="width:100%;margin-bottom:0.5rem;border-color:var(--danger);color:var(--danger)" onclick="reviewerTerminate('${id}')">⏹ 终止执行</button>
       <button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="showReassignModal('${id}')">🔄 二次分配</button>
     ` : ''}
-    ${isLeaderUser() && item.status === 'blocked' ? `
+    ${isMyReviewTask(item) && item.status === 'blocked' ? `
       <button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="showReassignModal('${id}')">🔄 二次分配</button>
     ` : ''}
-    ${isLeaderUser() && (item.status === 'done' || item.status === 'terminated') ? `
+    ${isMyReviewTask(item) && (item.status === 'done' || item.status === 'terminated') ? `
       <button class="btn btn-ghost" style="width:100%;margin-bottom:0.5rem;border-color:${STAR_GOLD};color:#6b5410" onclick="reviewerRevoke('${id}')">↩ 退回执行中</button>
     ` : ''}
     ${isAdmin ? `<button class="btn btn-danger" style="width:100%" onclick="deleteItem('${id}')">🗑️ 删除任务（超级管理员）</button>` : ''}

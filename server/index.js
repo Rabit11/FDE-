@@ -149,8 +149,16 @@ function createChildTask(data, user, parent) {
 }
 
 function checkReviewerAccess(item, user) {
-  if (isLeader(user)) return true;
+  if (!item || !user) return false;
+  if (!isLeader(user)) return false;
   return item.reviewer === user.name;
+}
+
+function sanitizeItemForViewer(item, user) {
+  if (!item) return item;
+  if (queries.isTaskReviewer(item, user?.name)) return item;
+  const { check_count, check_views, check_last, ...safe } = item;
+  return safe;
 }
 
 const app = express();
@@ -273,7 +281,10 @@ app.get('/api/users/:id/review-projects', (req, res) => {
   if (req.params.id !== req.user.id && !req.user.can_view_profiles && req.user.role !== 'admin') {
     return res.status(403).json({ error: '无权查看' });
   }
-  res.json(queries.getUserReviewProjects(user.name));
+  const rows = queries.getUserReviewProjects(user.name).map(r => (
+    req.user.name === user.name ? r : { ...r, check_count: undefined }
+  ));
+  res.json(rows);
 });
 
 app.patch('/api/users/:id/profile', (req, res) => {
@@ -293,24 +304,27 @@ app.get('/api/items', (req, res) => {
   if (req.user.role === 'executor' && req.query.mine === 'true') {
     filters.assignee = req.user.name;
   }
-  res.json(queries.getItems(filters));
+  res.json(queries.getItems(filters).map(i => sanitizeItemForViewer(i, req.user)));
 });
 
 app.get('/api/items/my-work', (req, res) => {
-  res.json(queries.getMyWorkItems(req.user.name));
+  res.json(queries.getMyWorkItems(req.user.name).map(i => sanitizeItemForViewer(i, req.user)));
 });
 
 app.get('/api/items/:id', (req, res) => {
   const item = queries.getItem(req.params.id);
   if (!item) return res.status(404).json({ error: 'Not found' });
-  res.json(item);
+  res.json(sanitizeItemForViewer(item, req.user));
 });
 
 app.post('/api/items/:id/check-view', (req, res) => {
   const item = queries.getItem(req.params.id);
   if (!item) return res.status(404).json({ error: '任务不存在' });
+  if (!queries.isTaskReviewer(item, req.user.name)) {
+    return res.status(403).json({ error: '只能查看自己审核任务的检查次数' });
+  }
   const updated = queries.recordCheckView(req.params.id, req.user.name);
-  res.json(updated || item);
+  res.json(sanitizeItemForViewer(updated || item, req.user));
 });
 
 app.post('/api/items', async (req, res) => {
@@ -534,20 +548,23 @@ app.post('/api/items/:id/reviewer-reassign', requirePermission('review', 'all'),
   const item = queries.getItem(req.params.id);
   if (!item) return res.status(404).json({ error: '任务不存在' });
   if (!checkReviewerAccess(item, req.user)) {
-    return res.status(403).json({ error: '无权操作此任务' });
+    return res.status(403).json({ error: '只能对自己审核的任务进行二次分配' });
   }
   if (!['blocked', 'todo', 'in_progress', 'review', 'submitted'].includes(item.status)) {
     return res.status(400).json({ error: '仅执行中或阻塞任务可二次分配' });
   }
-  const { assignee, assistants, comment } = req.body;
+  const { assignee, assistants, comment, team_size } = req.body;
   if (!assignee?.trim()) {
-    return res.status(400).json({ error: '请选择主执行人' });
+    return res.status(400).json({ error: '请勾选至少一名执行人员' });
   }
+  const assistantList = Array.isArray(assistants) ? assistants.filter(a => a && a !== assignee) : [];
+  const teamSize = Number(team_size) || 1 + assistantList.length;
   const previous = { ...item };
   const updated = queries.updateItem(req.params.id, {
     status: 'in_progress',
     assignee: assignee.trim(),
-    assistants: assistants || [],
+    assistants: assistantList,
+    team_size: teamSize,
     blocked_reason: null,
     blocker_type: null,
     actor: req.user.name,
