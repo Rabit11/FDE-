@@ -1,0 +1,18 @@
+services:
+  fde-platform:
+    build:
+      context: .
+      pull: false
+    image: fde-platform:latest
+    container_name: fde-platform
+    restart: unless-stopped
+    ports:
+      - "8084:8084"
+    environment:
+      PORT: "8084"
+      NODE_ENV: production
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    working_dir: /app

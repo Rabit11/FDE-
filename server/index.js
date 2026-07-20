@@ -536,8 +536,8 @@ app.post('/api/items/:id/reviewer-reassign', requirePermission('review', 'all'),
   if (!checkReviewerAccess(item, req.user)) {
     return res.status(403).json({ error: '无权操作此任务' });
   }
-  if (item.status !== 'blocked') {
-    return res.status(400).json({ error: '仅阻塞任务可二次分配' });
+  if (!['blocked', 'todo', 'in_progress', 'review', 'submitted'].includes(item.status)) {
+    return res.status(400).json({ error: '仅执行中或阻塞任务可二次分配' });
   }
   const { assignee, assistants, comment } = req.body;
   if (!assignee?.trim()) {

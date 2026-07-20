@@ -476,6 +476,7 @@ function flowListActionsHtml(item) {
   const cat = flowCategory(item);
   if (cat === 'in_progress') {
     parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--danger" title="终止执行" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">停</button>`);
+    parts.push(`<button type="button" class="btn btn-primary btn-sm flow-list-action" title="二次分配" onclick="event.stopPropagation();showReassignModal('${item.id}')">配</button>`);
   }
   if (cat === 'blocked') {
     parts.push(`<button type="button" class="btn btn-primary btn-sm flow-list-action" title="二次分配" onclick="event.stopPropagation();showReassignModal('${item.id}')">配</button>`);
@@ -493,7 +494,7 @@ function leaderActionsHtml(item) {
   if (!isLeaderUser()) return '';
   const cat = flowCategory(item);
   if (cat === 'in_progress') {
-    return `<button type="button" class="btn btn-ghost btn-sm task-card-btn task-card-btn--danger" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">⏹ 终止</button>`;
+    return `<button type="button" class="btn btn-ghost btn-sm task-card-btn task-card-btn--danger" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">⏹ 终止</button><button type="button" class="btn btn-primary btn-sm task-card-btn" onclick="event.stopPropagation();showReassignModal('${item.id}')">🔄 二次分配</button>`;
   }
   if (cat === 'blocked') {
     return `<button type="button" class="btn btn-primary btn-sm task-card-btn" onclick="event.stopPropagation();showReassignModal('${item.id}')">🔄 二次分配</button>`;
@@ -2068,6 +2069,7 @@ function renderReview() {
       <div class="accept-actions" style="flex-wrap:wrap;gap:0.5rem">
         ${mode === 'active' && isLeaderUser() ? `
           <button class="btn btn-ghost btn-sm" onclick="reviewerTerminate('${i.id}')" style="border-color:var(--danger);color:var(--danger)">⏹ 终止</button>
+          <button class="btn btn-primary btn-sm" onclick="showReassignModal('${i.id}')">🔄 二次分配</button>
         ` : ''}
         ${mode === 'blocked' && isLeaderUser() ? `
           <button class="btn btn-primary btn-sm" onclick="showReassignModal('${i.id}')">🔄 二次分配</button>
@@ -2083,7 +2085,7 @@ function renderReview() {
   };
 
   return `
-    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">任务审核视图（已合并至任务中心）：对<strong>执行中</strong>终止、<strong>阻塞</strong>二次分配、<strong>已归档/已终止</strong>退回执行中。</p>
+    <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1rem">任务审核视图（已合并至任务中心）：对<strong>执行中</strong>终止/二次分配、<strong>阻塞</strong>二次分配、<strong>已归档/已终止</strong>退回执行中。</p>
     <div class="section-title">执行中 (${active.length})</div>
     ${active.length ? active.map(i => renderReviewCard(i, 'active')).join('') : '<div class="empty-state">暂无执行中任务</div>'}
     <div class="section-title" style="margin-top:1.5rem">阻塞 (${blocked.length})</div>
@@ -3069,7 +3071,7 @@ function showReassignModal(id) {
       </select>
     </div>
     <div class="form-group"><label>备注（可选）</label><input id="reassignComment" placeholder="分配说明..."></div>
-    <button class="btn btn-primary" style="width:100%" onclick="reviewerReassign('${id}')">确认二次分配并退回执行中</button>
+    <button class="btn btn-primary" style="width:100%" onclick="reviewerReassign('${id}')">确认二次分配</button>
   `);
 }
 
@@ -3082,7 +3084,7 @@ async function reviewerReassign(id) {
   await leaderAction(async () => {
     await api(`/items/${id}/reviewer-reassign`, { method: 'POST', body: { assignee, assistants, comment } });
     closeModal();
-  }, '已二次分配，任务退回执行中');
+  }, '已二次分配并通知相关人员');
 }
 
 function showNewItemModal() {
@@ -3155,6 +3157,7 @@ function showItemDetail(id) {
     ${canEdit ? `<button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="updateItem('${id}')">保存</button>` : ''}
     ${isLeaderUser() && flowCategory(item) === 'in_progress' ? `
       <button class="btn btn-ghost" style="width:100%;margin-bottom:0.5rem;border-color:var(--danger);color:var(--danger)" onclick="reviewerTerminate('${id}')">⏹ 终止执行</button>
+      <button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="showReassignModal('${id}')">🔄 二次分配</button>
     ` : ''}
     ${isLeaderUser() && item.status === 'blocked' ? `
       <button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="showReassignModal('${id}')">🔄 二次分配</button>

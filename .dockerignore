@@ -1,0 +1,10 @@
+node_modules
+.git
+data/platform.json
+data/uploads
+*.m4a
+*.mp3
+*.wav
+*.log
+fde-deploy.tgz
+deploy/local/.env
