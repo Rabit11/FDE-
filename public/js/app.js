@@ -1,12 +1,12 @@
 const API = '/api';
 const BLOCKER_TYPES = { none: '无卡点', resource: '资源冲突', time: '时间冲突', technical: '技术问题', other: '其他' };
 const BLOCKER_ICONS = { resource: '🔧', time: '⏰', technical: '💻', other: '⚠️' };
-const STAR_GOLD = '#f5d061';
-const STAR_GOLD_DARK = '#8a6d12';
+const STAR_GOLD = '#d48806';
+const STAR_GOLD_DARK = '#ad6800';
 const FLOW_COLS = [
-  { id: 'in_progress', label: '执行中', color: '#f5d061' },
-  { id: 'blocked', label: '阻塞', color: '#ef4444' },
-  { id: 'done', label: '已归档', color: '#22c55e' },
+  { id: 'in_progress', label: '执行中', color: '#1a5fb4' },
+  { id: 'blocked', label: '阻塞', color: '#c41e3a' },
+  { id: 'done', label: '已归档', color: '#389e6d' },
   { id: 'terminated', label: '已终止', color: '#94a3b8' },
 ];
 const ACTIVE_STATUSES = ['submitted', 'todo', 'in_progress', 'review'];
@@ -21,6 +21,10 @@ const PRIORITY_LEVELS = [
   { value: 3, label: 'P3 普通', short: 'P3' },
 ];
 const WIP_LIMITS = { in_progress: 10, blocked: 5 };
+/** Live-sync 时暂存工作台表单草稿，避免 3s 整页重绘导致点不中 / 输入丢失 */
+const workFormDrafts = new Map();
+let liveSyncBusy = false;
+let kanbanDragging = false;
 
 function flowCategory(item) {
   const status = typeof item === 'string' ? item : item?.status;
@@ -157,7 +161,7 @@ function sortByPriority(items = []) {
 
 function canEditTaskPriority(item) {
   if (!item || !state.user) return false;
-  if (isReviewerUser()) return true;
+  if (isReviewerUser()) return isMyReviewTask(item) || !item.reviewer;
   return item.assignee === state.user.name || (item.assistants || []).includes(state.user.name);
 }
 
@@ -247,9 +251,60 @@ function updateKanbanListHint(manual = false) {
   hint.textContent = base + sync;
 }
 
+function isContentEditingBusy() {
+  const el = document.activeElement;
+  if (!el || el === document.body) return false;
+  const tag = (el.tagName || '').toLowerCase();
+  if (tag === 'textarea' || tag === 'select' || tag === 'input' || el.isContentEditable) return true;
+  if (el.closest?.('.work-card-compact, .work-card-actions, .work-card-form, .modal-overlay.show')) return true;
+  return false;
+}
+
+function captureWorkFormDrafts() {
+  document.querySelectorAll('[id^="prog-desc-"]').forEach(ta => {
+    const id = ta.id.replace('prog-desc-', '');
+    const blocker = document.getElementById(`prog-blocker-${id}`);
+    const blockerDesc = document.getElementById(`prog-blocker-desc-${id}`);
+    const draft = {
+      description: ta.value || '',
+      blocker: blocker?.value || 'none',
+      blockerDesc: blockerDesc?.value || '',
+    };
+    if (draft.description || draft.blocker !== 'none' || draft.blockerDesc) {
+      workFormDrafts.set(id, draft);
+    } else {
+      workFormDrafts.delete(id);
+    }
+  });
+}
+
+function restoreWorkFormDrafts() {
+  workFormDrafts.forEach((draft, id) => {
+    const ta = document.getElementById(`prog-desc-${id}`);
+    const blocker = document.getElementById(`prog-blocker-${id}`);
+    const blockerDesc = document.getElementById(`prog-blocker-desc-${id}`);
+    if (ta) ta.value = draft.description || '';
+    if (blocker) blocker.value = draft.blocker || 'none';
+    if (blockerDesc) blockerDesc.value = draft.blockerDesc || '';
+  });
+}
+
+function shouldSkipLiveDomRefresh(manual = false) {
+  if (manual) return false;
+  if (kanbanDragging) return true;
+  if (isContentEditingBusy()) return true;
+  if (document.querySelector('.modal-overlay.show')) return true;
+  return false;
+}
+
 async function refreshTaskCenterLive(manual = false) {
   if (state.currentView !== 'taskcenter') return;
   await loadData();
+  if (shouldSkipLiveDomRefresh(manual)) {
+    state.liveSyncUpdatedAt = new Date();
+    updateWorkflowBadge();
+    return;
+  }
   const bar = document.getElementById('kanban-filter-bar');
   if (bar) bar.outerHTML = renderKanbanFilterBar(kanbanBaseItems());
   refreshKanbanContent();
@@ -258,15 +313,18 @@ async function refreshTaskCenterLive(manual = false) {
   updateKanbanListHint(manual);
 }
 
-async function refreshMyWorkLive() {
+async function refreshMyWorkLive(manual = false) {
   if (state.currentView !== 'mywork') return;
   await loadData();
   const isExecutor = (state.user?.capabilities || []).includes('executor');
   if (isExecutor) {
     try { state.myWorkItems = await api('/items/my-work'); } catch { state.myWorkItems = []; }
   }
+  if (shouldSkipLiveDomRefresh(manual)) return;
+  captureWorkFormDrafts();
   const content = document.getElementById('content');
   if (content) content.innerHTML = renderMyWork();
+  restoreWorkFormDrafts();
 }
 
 async function refreshTeamLive() {
@@ -287,7 +345,7 @@ async function refreshLiveView(manual = false) {
     return;
   }
   if (view === 'mywork') {
-    await refreshMyWorkLive();
+    await refreshMyWorkLive(manual);
     state.liveSyncUpdatedAt = new Date();
     return;
   }
@@ -300,7 +358,11 @@ async function refreshLiveView(manual = false) {
 function startLiveSyncPolling() {
   stopLiveSyncPolling();
   if (!shouldLiveSyncView()) return;
-  liveSyncTimer = setInterval(() => refreshLiveView(false), LIVE_SYNC_MS);
+  liveSyncTimer = setInterval(() => {
+    if (liveSyncBusy) return;
+    liveSyncBusy = true;
+    Promise.resolve(refreshLiveView(false)).finally(() => { liveSyncBusy = false; });
+  }, LIVE_SYNC_MS);
 }
 
 async function loadData() {
@@ -1676,11 +1738,11 @@ function renderKanbanCore() {
 function renderTaskCenter() {
   const blocked = kanbanBaseItems().filter(i => i.status === 'blocked').length;
   const blockedAlert = blocked
-    ? `<div class="alert-banner">🚧 当前有 <strong>${blocked}</strong> 项阻塞任务${canModifyKanban() ? '待处理' : ''} <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('blocked')">立即查看</button></div>`
+    ? `<div class="alert-banner alert-banner--warn">当前有 <strong>${blocked}</strong> 项阻塞任务${canModifyKanban() ? '待处理' : ''} <button type="button" class="btn btn-ghost btn-sm" onclick="goTaskCenter('blocked')">立即查看</button></div>`
     : '';
   const readonlyHint = canModifyKanban()
     ? ''
-    : '<div class="alert-banner alert-banner--info">👁️ 任务中心全员可见；执行人员仅可查看任务与进展，状态变更请在「今日工作台」提交进展后由领导处理</div>';
+    : '<div class="alert-banner alert-banner--info">任务中心全员可见；执行人员仅可查看任务与进展，状态变更请在「今日工作台」提交进展后由领导处理</div>';
   return `${readonlyHint}${blockedAlert}${renderKanbanCore()}`;
 }
 
@@ -2969,6 +3031,11 @@ async function moveItem(id, newCategory) {
     toast('执行人员无权改动任务中心状态，请提交进展后等待领导处理', 'error');
     return;
   }
+  const item = state.items.find(i => i.id === id);
+  if (item?.reviewer && !isMyReviewTask(item)) {
+    toast('只能移动自己审核的任务', 'error');
+    return;
+  }
   const col = FLOW_COLS.find(c => c.id === newCategory);
   const limit = WIP_LIMITS[newCategory];
   const count = kanbanBaseItems().filter(i => flowCategory(i) === newCategory && i.id !== id).length;
@@ -2995,14 +3062,24 @@ function initDragDrop() {
   document.querySelectorAll('.task-card').forEach(card => {
     card.addEventListener('click', e => { if (!touchDragging) showItemDetail(card.dataset.id); });
     if (!canDrag) return;
-    card.addEventListener('dragstart', e => { draggedId = card.dataset.id; card.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
-    card.addEventListener('dragend', () => { card.classList.remove('dragging'); draggedId = null; });
+    card.addEventListener('dragstart', e => {
+      draggedId = card.dataset.id;
+      kanbanDragging = true;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      draggedId = null;
+      kanbanDragging = false;
+    });
 
     card.addEventListener('touchstart', e => {
       if (e.touches.length !== 1) return;
       touchDragging = false;
       touchCard = card;
       draggedId = card.dataset.id;
+      kanbanDragging = true;
       card.classList.add('dragging');
     }, { passive: true });
 
@@ -3040,6 +3117,7 @@ function initDragDrop() {
       const id = draggedId;
       touchCard = null;
       draggedId = null;
+      kanbanDragging = false;
       if (touchDragging && targetStatus && id) await moveItem(id, targetStatus);
       setTimeout(() => { touchDragging = false; }, 100);
     });
@@ -3164,7 +3242,7 @@ function showItemDetail(id) {
   recordTaskCheckView(id);
   const updates = (item.progress_updates || []);
   const isAdmin = state.user?.role === 'admin';
-  const canEdit = isReviewerUser();
+  const canEdit = isMyReviewTask(item) || (isReviewerUser() && !item.reviewer);
   const canProgress = item.assignee === state.user?.name || (item.assistants || []).includes(state.user?.name);
   const checkMeta = isMyReviewTask(item)
     ? ` ${checkCountBadgeHtml(item.check_count, { labeled: true })}`
@@ -3681,6 +3759,7 @@ async function submitProgress(id, fromModal = false) {
   if (result?.item) syncItemInState(result.item);
   if (result?.activity) prependActivityInState(result.activity);
   toast(blocker_type && blocker_type !== 'none' ? '进展已提交，任务已标记为阻塞' : '今日进展已提交');
+  workFormDrafts.delete(id);
   if (fromModal) closeModal();
   if (state.currentView === 'dashboard' && isReviewerUser()) {
     refreshActivityFeedDom();

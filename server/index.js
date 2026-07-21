@@ -384,10 +384,18 @@ app.patch('/api/items/:id', (req, res) => {
   if (!isReviewer) {
     return res.status(403).json({ error: '执行人员无权改动流动看板，请提交进展后等待审核人员处理' });
   }
+  const existing = queries.getItem(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+  if (existing.reviewer && req.user.role !== 'admin' && !checkReviewerAccess(existing, req.user)) {
+    return res.status(403).json({ error: '只能操作指定给您审核的任务' });
+  }
   const body = { ...req.body, actor: req.user.name };
+  if (req.user.role !== 'admin' && body.reviewer != null && body.reviewer !== existing.reviewer) {
+    return res.status(403).json({ error: '无权变更任务审核人' });
+  }
   const item = queries.updateItem(req.params.id, body);
   if (!item) return res.status(404).json({ error: 'Not found' });
-  res.json(item);
+  res.json(sanitizeItemForViewer(item, req.user));
 });
 
 app.patch('/api/items/:id/priority', (req, res) => {
@@ -474,17 +482,25 @@ app.post('/api/items/:id/smart-assign', requirePermission('assign', 'all'), asyn
 app.post('/api/items/:id/confirm-complete', requirePermission('review', 'acceptance', 'all'), (req, res) => {
   const item = queries.getItem(req.params.id);
   if (!item) return res.status(404).json({ error: '任务不存在' });
+  if (item.reviewer) {
+    if (req.user.role !== 'admin' && !checkReviewerAccess(item, req.user)) {
+      return res.status(403).json({ error: '只能操作指定给您审核的任务' });
+    }
+  } else if (req.user.role !== 'admin' && !(req.user.capabilities || []).includes('reviewer')) {
+    return res.status(403).json({ error: '无权确认完成' });
+  }
   if (!['review', 'in_progress', 'blocked'].includes(item.status)) {
     return res.status(400).json({ error: '仅待验收或进行中的任务可确认完成' });
   }
-  const updated = queries.updateItem(req.params.id, {
+  const updates = {
     status: 'done',
     acceptance_status: 'accepted',
-    reviewer: req.user.name,
     actor: req.user.name,
-  });
+  };
+  if (!item.reviewer) updates.reviewer = req.user.name;
+  const updated = queries.updateItem(req.params.id, updates);
   queries.logActivity(req.params.id, 'confirmed', `审核人 ${req.user.name} 确认完成`, req.user.name);
-  res.json(updated);
+  res.json(sanitizeItemForViewer(updated, req.user));
 });
 
 app.post('/api/items/:id/complete', (req, res) => {
