@@ -56,8 +56,7 @@ async function intelligentAssign(taskId, teamSize = 2) {
 
   const executors = queries.getUsersRaw().filter(u =>
     u.active !== false &&
-    (u.capabilities || []).includes('executor') &&
-    !(u.capabilities || []).includes('reviewer')
+    (u.capabilities || []).includes('executor')
   );
 
   const scored = executors.map(u => scoreExecutor(u, task)).sort((a, b) => b.score - a.score);

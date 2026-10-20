@@ -11,6 +11,7 @@ const asr = require('./ai/asr');
 const voice = require('./ai/voice');
 const assigner = require('./ai/assign');
 const meeting = require('./ai/meeting');
+const robot = require('./ai/robotService');
 const { CAPABILITIES, login, logout, authMiddleware, requirePermission, getNavForUser, getDefaultView, getRoleLabel, isLeader } = require('./auth');
 
 async function autoApproveItem(itemId, reviewer, teamSize = 2, actor = 'system') {
@@ -150,6 +151,7 @@ function createChildTask(data, user, parent) {
 
 function checkReviewerAccess(item, user) {
   if (!item || !user) return false;
+  if (user.role === 'admin') return true;
   if (!isLeader(user)) return false;
   return item.reviewer === user.name;
 }
@@ -253,8 +255,9 @@ app.get('/api/users/reviewers/list', (req, res) => {
   res.json(queries.getUsers().filter(u => u.active !== false && (u.capabilities || []).includes('reviewer')));
 });
 app.get('/api/users/executors/list', (req, res) => {
+  // 兼具审核能力的人也可作为执行人员被选择
   res.json(queries.getUsers().filter(u => u.active !== false &&
-    (u.capabilities || []).includes('executor') && !(u.capabilities || []).includes('reviewer')
+    (u.capabilities || []).includes('executor')
   ));
 });
 app.get('/api/users/:id', (req, res) => {
@@ -393,9 +396,44 @@ app.patch('/api/items/:id', (req, res) => {
   if (req.user.role !== 'admin' && body.reviewer != null && body.reviewer !== existing.reviewer) {
     return res.status(403).json({ error: '无权变更任务审核人' });
   }
-  const item = queries.updateItem(req.params.id, body);
-  if (!item) return res.status(404).json({ error: 'Not found' });
-  res.json(sanitizeItemForViewer(item, req.user));
+  try {
+    const item = queries.updateItem(req.params.id, body);
+    if (!item) return res.status(404).json({ error: 'Not found' });
+    res.json(sanitizeItemForViewer(item, req.user));
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) });
+  }
+});
+
+/** 任务相关人员可改标题 / 描述 / 预期时间（含已归档），留痕并通知责任人 */
+app.patch('/api/items/:id/content', (req, res) => {
+  const existing = queries.getItem(req.params.id);
+  if (!existing) return res.status(404).json({ error: '任务不存在' });
+  const isAdmin = req.user.role === 'admin';
+  const related = queries.isTaskRelatedPerson(existing, req.user.name);
+  if (!isAdmin && !related) {
+    return res.status(403).json({ error: '仅提出人、审核人、主执行人、协助人可修改标题/描述/预期时间' });
+  }
+  // 已终止不允许；已归档(done)允许
+  if (existing.status === 'terminated' && !isAdmin) {
+    return res.status(403).json({ error: '已终止任务不可再修改内容' });
+  }
+  try {
+    const result = queries.updateItemContent(req.params.id, {
+      title: req.body?.title,
+      description: req.body?.description,
+      deadline: req.body?.deadline,
+      actor: req.user.name,
+    });
+    if (!result) return res.status(404).json({ error: '任务不存在' });
+    res.json({
+      ok: true,
+      item: sanitizeItemForViewer(result.item, req.user),
+      changes: result.changes,
+    });
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) });
+  }
 });
 
 app.patch('/api/items/:id/priority', (req, res) => {
@@ -428,6 +466,20 @@ app.delete('/api/items/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+/** 每日进展日期：留空则取提交时的 UTC 日期，传入则校验 YYYY-MM-DD */
+function parseProgressDate(value) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return { date: new Date().toISOString().slice(0, 10) };
+  }
+  const raw = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return { error: '进展日期格式须为 YYYY-MM-DD' };
+  const d = new Date(`${raw}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== raw) {
+    return { error: '进展日期不是有效日期' };
+  }
+  return { date: raw };
+}
+
 app.post('/api/items/:id/progress', (req, res) => {
   const item = queries.getItem(req.params.id);
   if (!item) return res.status(404).json({ error: '任务不存在' });
@@ -436,16 +488,46 @@ app.post('/api/items/:id/progress', (req, res) => {
   if (!isAssignee && !isAssistant && req.user.role !== 'admin') {
     return res.status(403).json({ error: '只能为自己负责的任务提交进展' });
   }
-  const { description, blocker_type, blocker_desc } = req.body;
+  const { description, blocker_type, blocker_desc, date } = req.body;
   if (!description?.trim() && (!blocker_type || blocker_type === 'none')) {
     return res.status(400).json({ error: '请填写进展描述或卡点问题' });
   }
+  const parsedDate = parseProgressDate(date);
+  if (parsedDate.error) return res.status(400).json({ error: parsedDate.error });
   const result = queries.addProgressUpdate(req.params.id, {
     user: req.user.name,
+    date: parsedDate.date,
     description: description?.trim() || '',
     blocker_type: blocker_type || 'none',
     blocker_desc: blocker_desc?.trim() || '',
   });
+  res.json(result);
+});
+
+/** 修改已提交的每日进展：提交人本人或超级管理员，留痕 */
+app.patch('/api/items/:id/progress/:updateId', (req, res) => {
+  const item = queries.getItem(req.params.id);
+  if (!item) return res.status(404).json({ error: '任务不存在' });
+  const update = (item.progress_updates || []).find(u => u.id === req.params.updateId);
+  if (!update) return res.status(404).json({ error: '进展记录不存在' });
+  if (update.user !== req.user.name && req.user.role !== 'admin') {
+    return res.status(403).json({ error: '仅进展提交人本人或超级管理员可修改' });
+  }
+  const { description, blocker_type, blocker_desc, date } = req.body;
+  const nextDescription = description === undefined ? (update.description || '') : String(description).trim();
+  const nextBlockerType = blocker_type === undefined ? (update.blocker_type || 'none') : blocker_type;
+  if (!nextDescription && (!nextBlockerType || nextBlockerType === 'none')) {
+    return res.status(400).json({ error: '请填写进展描述或卡点问题' });
+  }
+  const parsedDate = parseProgressDate(date === undefined ? update.date : date);
+  if (parsedDate.error) return res.status(400).json({ error: parsedDate.error });
+  const result = queries.updateProgressUpdate(req.params.id, req.params.updateId, {
+    date: parsedDate.date,
+    description: nextDescription,
+    blocker_type: nextBlockerType || 'none',
+    blocker_desc: blocker_desc === undefined ? (update.blocker_desc || '') : String(blocker_desc).trim(),
+  }, req.user.name);
+  if (!result) return res.status(404).json({ error: '进展记录不存在' });
   res.json(result);
 });
 
@@ -757,6 +839,20 @@ app.post('/api/ai/meeting/:id/parse', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/** 个人删除自己的会议记录 */
+app.delete('/api/ai/meeting/:id', (req, res) => {
+  const doc = queries.getVoiceDoc(req.params.id);
+  if (!doc) return res.status(404).json({ error: '会议记录不存在' });
+  const isOwner = doc.user_id && doc.user_id === req.user.id;
+  const isAdmin = req.user.role === 'admin';
+  if (!isOwner && !isAdmin) {
+    return res.status(403).json({ error: '只能删除自己的会议记录' });
+  }
+  const ok = queries.deleteVoiceDoc(req.params.id);
+  if (!ok) return res.status(404).json({ error: '会议记录不存在或已删除' });
+  res.json({ ok: true, id: req.params.id });
+});
+
 app.get('/api/ai/voice/docs', (req, res) => res.json(queries.getVoiceDocs()));
 app.get('/api/ai/voice/docs/:id', (req, res) => {
   const doc = queries.getVoiceDoc(req.params.id);
@@ -837,6 +933,37 @@ app.post('/api/ai/document/process', uploadDoc.single('document'), async (req, r
 
 app.get('/api/ai/status', (req, res) => {
   res.json(llm.getProviderInfo());
+});
+
+// ── 工作机器人 ──
+app.post('/api/robot/chat', async (req, res) => {
+  try {
+    const message = String(req.body?.message || '').trim();
+    if (!message) return res.status(400).json({ error: '请输入内容' });
+    const result = await robot.handleMessage(req.user, message);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message || '处理失败' });
+  }
+});
+
+app.post('/api/robot/confirm', (req, res) => {
+  try {
+    const { proposal_id, action, patch } = req.body || {};
+    if (!proposal_id) return res.status(400).json({ error: '缺少 proposal_id' });
+    const result = robot.confirmProposal(req.user, proposal_id, action || 'accept', patch || {});
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message || '确认失败' });
+  }
+});
+
+app.get('/api/robot/history', (req, res) => {
+  res.json(robot.getHistory(req.user, Number(req.query.limit) || 40));
+});
+
+app.get('/api/robot/logs', (req, res) => {
+  res.json(robot.getLogs(req.user, Number(req.query.limit) || 30));
 });
 
 // ── SPA fallback ──

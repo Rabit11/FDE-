@@ -15,7 +15,11 @@ function normalizeTaskTitle(title) {
 
 function load() {
   if (!fs.existsSync(dbFile)) {
-    return { items: [], users: [], activity_log: [], ai_insights: [], chat_history: [], voice_documents: [], req_counter: {}, notifications: [] };
+    return {
+      items: [], users: [], activity_log: [], ai_insights: [], chat_history: [],
+      voice_documents: [], req_counter: {}, notifications: [],
+      work_logs: [], robot_messages: [], robot_proposals: [],
+    };
   }
   const data = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
   if (!data.users) data.users = [];
@@ -23,6 +27,9 @@ function load() {
   if (!data.voice_documents) data.voice_documents = [];
   if (!data.req_counter) data.req_counter = {};
   if (!data.notifications) data.notifications = [];
+  if (!data.work_logs) data.work_logs = [];
+  if (!data.robot_messages) data.robot_messages = [];
+  if (!data.robot_proposals) data.robot_proposals = [];
   let healed = false;
   if (data.sprints) {
     delete data.sprints;
@@ -378,8 +385,13 @@ const queries = {
       demo_url: data.demo_url || null, acceptance_status: 'pending', acceptance_feedback: null,
       check_count: 0,
       check_views: {},
+      deadline: data.deadline || null,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(), completed_at: null,
     };
+    if (!item.deadline) {
+      const embedded = queries.parseDeadline(item.description || '');
+      if (embedded) item.deadline = embedded;
+    }
     _data.items.push(item);
     queries.logActivity(item.id, 'created', `创建 ${item.type}: ${item.title}`, data.actor || 'user');
     queries._persist();
@@ -390,11 +402,24 @@ const queries = {
     if (idx === -1) return null;
     const prev = { ..._data.items[idx] };
     const current = _data.items[idx];
-    const fields = ['title', 'description', 'status', 'priority', 'story_points', 'assignee', 'assistants', 'parent_id', 'acceptance_criteria', 'blocked_reason', 'blocker_type', 'demo_url', 'acceptance_status', 'acceptance_feedback', 'created_by', 'reviewer', 'team_size', 'req_no'];
+    const fields = ['title', 'description', 'deadline', 'status', 'priority', 'story_points', 'assignee', 'assistants', 'parent_id', 'acceptance_criteria', 'blocked_reason', 'blocker_type', 'demo_url', 'acceptance_status', 'acceptance_feedback', 'created_by', 'reviewer', 'team_size', 'req_no'];
     fields.forEach(f => {
       if (data[f] === undefined) return;
       current[f] = f === 'title' ? normalizeTaskTitle(data[f]) : data[f];
     });
+    if (data.deadline !== undefined || data.description !== undefined) {
+      try {
+        if (data.deadline !== undefined) {
+          current.description = queries.applyDeadlineToDescription(current.description || '', data.deadline);
+          current.deadline = String(data.deadline || '').trim() || null;
+        } else {
+          const embedded = queries.parseDeadline(current.description || '');
+          if (embedded) current.deadline = embedded;
+        }
+      } catch (err) {
+        throw err;
+      }
+    }
     if (data.status === 'terminated' && data.acceptance_status === undefined) {
       current.acceptance_status = 'terminated';
     }
@@ -430,11 +455,115 @@ const queries = {
   },
   relatedPeople(item) {
     return [...new Set([
+      item?.created_by,
       item?.reviewer,
       item?.assignee,
       ...(item?.assistants || []),
-      item?.created_by,
     ].filter(Boolean))];
+  },
+  isTaskRelatedPerson(item, userName) {
+    if (!item || !userName) return false;
+    return queries.relatedPeople(item).includes(userName);
+  },
+  parseDeadline(itemOrDesc) {
+    if (itemOrDesc && typeof itemOrDesc === 'object') {
+      if (itemOrDesc.deadline && /^\d{4}-\d{2}-\d{2}$/.test(String(itemOrDesc.deadline))) {
+        return String(itemOrDesc.deadline);
+      }
+      return queries.parseDeadline(itemOrDesc.description || '');
+    }
+    const m = String(itemOrDesc || '').match(/期望[：:]\s*(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : '';
+  },
+  applyDeadlineToDescription(description, deadline) {
+    const text = String(description || '');
+    const date = String(deadline || '').trim();
+    if (!date) {
+      return text.replace(/\n?期望[：:]\s*\d{4}-\d{2}-\d{2}/g, '').replace(/\n{3,}/g, '\n\n').trim();
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new Error('预期时间格式须为 YYYY-MM-DD');
+    }
+    if (/期望[：:]\s*\d{4}-\d{2}-\d{2}/.test(text)) {
+      return text.replace(/期望[：:]\s*\d{4}-\d{2}-\d{2}/, `期望：${date}`);
+    }
+    return text ? `${text.replace(/\s+$/, '')}\n期望：${date}` : `期望：${date}`;
+  },
+  notifyContentChanged(item, actor, changes) {
+    if (!item || !changes?.length) return;
+    const detail = `${actor || '同事'} 修改了任务：${changes.join('；')}`;
+    const targets = queries.relatedPeople(item).filter(name => name !== actor);
+    targets.forEach(user => {
+      queries.upsertNotification(user, {
+        type: 'content_changed',
+        item_id: item.id,
+        title: item.title,
+        detail,
+        actor,
+      });
+    });
+  },
+  updateItemContent(id, { title, description, deadline, actor }) {
+    const idx = _data.items.findIndex(i => i.id === id);
+    if (idx === -1) return null;
+    const prev = { ..._data.items[idx] };
+    const current = _data.items[idx];
+    const changes = [];
+
+    if (title !== undefined) {
+      const nextTitle = normalizeTaskTitle(title);
+      if (!nextTitle) throw new Error('标题不能为空');
+      if (nextTitle !== (prev.title || '')) {
+        changes.push(`标题「${prev.title || '（空）'}」→「${nextTitle}」`);
+        current.title = nextTitle;
+      }
+    }
+
+    let nextDesc = description !== undefined ? String(description) : (current.description || '');
+    const prevDeadline = queries.parseDeadline(prev);
+    let nextDeadline = prevDeadline;
+    if (deadline !== undefined) {
+      nextDeadline = String(deadline || '').trim();
+      if (nextDeadline && !/^\d{4}-\d{2}-\d{2}$/.test(nextDeadline)) {
+        throw new Error('预期时间格式须为 YYYY-MM-DD');
+      }
+      nextDesc = queries.applyDeadlineToDescription(nextDesc, nextDeadline);
+      current.deadline = nextDeadline || null;
+      if ((prevDeadline || '') !== (nextDeadline || '')) {
+        changes.push(`预期时间「${prevDeadline || '（空）'}」→「${nextDeadline || '（空）'}」`);
+      }
+    } else if (description !== undefined) {
+      // 描述里若带期望日期，同步 deadline 字段
+      const embedded = queries.parseDeadline(nextDesc);
+      current.deadline = embedded || current.deadline || null;
+    }
+
+    if (description !== undefined || deadline !== undefined) {
+      if (nextDesc !== (prev.description || '')) {
+        if (description !== undefined) {
+          changes.push('任务描述已更新');
+        } else if (!changes.some(c => c.startsWith('预期时间'))) {
+          changes.push('任务描述已更新');
+        }
+        current.description = nextDesc;
+      } else if (deadline !== undefined) {
+        current.description = nextDesc;
+      }
+    }
+
+    if (!changes.length) {
+      return { item: current, changes: [] };
+    }
+
+    current.updated_at = new Date().toISOString();
+    _data.items[idx] = current;
+    queries.logActivity(id, 'content_changed', changes.join('；'), actor || 'user', {
+      item_title: current.title,
+      changes,
+    });
+    queries.notifyContentChanged(current, actor || 'user', changes);
+    queries._persist();
+    return { item: current, changes };
   },
   ensureNotifications() {
     if (!_data.notifications) _data.notifications = [];
@@ -661,6 +790,26 @@ const queries = {
     queries._persist();
     return { item, update, activity: queries.enrichActivityEntry(activity) };
   },
+  /** 修改已提交的每日进展（留痕，任务状态不变） */
+  updateProgressUpdate(itemId, updateId, data, actor) {
+    const item = _data.items.find(i => i.id === itemId);
+    if (!item) return null;
+    const update = (item.progress_updates || []).find(u => u.id === updateId);
+    if (!update) return null;
+    if (data.date) update.date = data.date;
+    if (data.description !== undefined) update.description = data.description;
+    if (data.blocker_type !== undefined) update.blocker_type = data.blocker_type;
+    if (data.blocker_desc !== undefined) update.blocker_desc = data.blocker_desc;
+    update.edited_at = new Date().toISOString();
+    update.edited_by = actor || update.user;
+    item.updated_at = new Date().toISOString();
+    const activity = queries.logActivity(itemId, 'progress_edited', `修改 ${update.date} 的每日进展`, actor || update.user, {
+      progress_text: (update.description || '').trim(),
+      item_title: item.title,
+    });
+    queries._persist();
+    return { item, update, activity: queries.enrichActivityEntry(activity) };
+  },
   getUserProjects(userName) {
     const items = _data.items.filter(i =>
       ['story', 'epic', 'task', 'bug'].includes(i.type) &&
@@ -763,7 +912,7 @@ const queries = {
     const SPECIFIC_ACTIONS = new Set([
       'progress', 'completed', 'confirmed', 'reviewer_terminate', 'reviewer_revoke',
       'reviewer_reassign', 'reviewer_reject', 'dispatched', 'priority_changed', 'deleted',
-      'auto_approved', 'auto_assigned', 'created',
+      'auto_approved', 'auto_assigned', 'created', 'content_changed',
     ]);
     const enriched = _data.activity_log
       .map(a => queries.enrichActivityEntry(a))
@@ -818,6 +967,114 @@ const queries = {
     Object.assign(doc, updates);
     queries._persist();
     return doc;
+  },
+  deleteVoiceDoc(id) {
+    const before = _data.voice_documents.length;
+    _data.voice_documents = _data.voice_documents.filter(d => d.id !== id);
+    if (_data.voice_documents.length === before) return false;
+    queries._persist();
+    return true;
+  },
+
+  ensureRobotStores() {
+    if (!_data.work_logs) _data.work_logs = [];
+    if (!_data.robot_messages) _data.robot_messages = [];
+    if (!_data.robot_proposals) _data.robot_proposals = [];
+  },
+
+  saveRobotMessage({ user_id, role, content, meta }) {
+    queries.ensureRobotStores();
+    const msg = {
+      id: uuid(),
+      user_id,
+      role: role === 'user' ? 'user' : 'assistant',
+      content: content || '',
+      meta: meta || null,
+      created_at: new Date().toISOString(),
+    };
+    _data.robot_messages.push(msg);
+    if (_data.robot_messages.length > 1000) {
+      _data.robot_messages = _data.robot_messages.slice(-1000);
+    }
+    queries._persist();
+    return msg;
+  },
+
+  getRobotMessages(userId, limit = 40) {
+    queries.ensureRobotStores();
+    return _data.robot_messages.filter(m => m.user_id === userId).slice(-limit);
+  },
+
+  createWorkLog(data) {
+    queries.ensureRobotStores();
+    const log = {
+      id: uuid(),
+      user_id: data.user_id,
+      user_name: data.user_name,
+      message: data.message || '',
+      extract: data.extract || null,
+      item_ids: data.item_ids || [],
+      proposal_ids: data.proposal_ids || [],
+      engine: data.engine || 'local',
+      work_date: data.work_date || new Date().toISOString().slice(0, 10),
+      created_at: new Date().toISOString(),
+    };
+    _data.work_logs.unshift(log);
+    if (_data.work_logs.length > 500) _data.work_logs = _data.work_logs.slice(0, 500);
+    queries._persist();
+    return log;
+  },
+
+  getWorkLogs(userId, limit = 30) {
+    queries.ensureRobotStores();
+    return _data.work_logs.filter(l => l.user_id === userId).slice(0, limit);
+  },
+
+  createRobotProposal(data) {
+    queries.ensureRobotStores();
+    const proposal = {
+      id: uuid(),
+      user_id: data.user_id,
+      user_name: data.user_name,
+      entry: data.entry,
+      source_message: data.source_message || '',
+      candidates: Array.isArray(data.candidates) ? data.candidates : [],
+      prefer_action: data.prefer_action || null,
+      match_score: data.match_score || 0,
+      status: 'proposed',
+      item_id: null,
+      created_at: new Date().toISOString(),
+      decided_at: null,
+      decided_by: null,
+    };
+    _data.robot_proposals.unshift(proposal);
+    queries._persist();
+    return proposal;
+  },
+
+  getRobotProposal(id) {
+    queries.ensureRobotStores();
+    return _data.robot_proposals.find(p => p.id === id) || null;
+  },
+
+  getRobotProposals(userId, status) {
+    queries.ensureRobotStores();
+    let list = _data.robot_proposals.filter(p => p.user_id === userId);
+    if (status) list = list.filter(p => p.status === status);
+    return list;
+  },
+
+  decideRobotProposal(id, status, decidedBy, extra = {}) {
+    queries.ensureRobotStores();
+    const p = _data.robot_proposals.find(x => x.id === id);
+    if (!p) return null;
+    p.status = status;
+    p.decided_at = new Date().toISOString();
+    p.decided_by = decidedBy;
+    if (extra.item_id) p.item_id = extra.item_id;
+    if (extra.entry) p.entry = extra.entry;
+    queries._persist();
+    return p;
   },
 };
 

@@ -23,6 +23,9 @@ const PRIORITY_LEVELS = [
 const WIP_LIMITS = { in_progress: 10, blocked: 5 };
 /** Live-sync 时暂存工作台表单草稿，避免 3s 整页重绘导致点不中 / 输入丢失 */
 const workFormDrafts = new Map();
+/** 执行人勾选顺序：第一个点击的为主执行，其后为协助 */
+let reqExecutorOrder = [];
+let reassignExecutorOrder = [];
 let liveSyncBusy = false;
 let kanbanDragging = false;
 
@@ -35,7 +38,7 @@ function flowCategory(item) {
   return 'in_progress';
 }
 
-let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], userReviewProjects: [], notifications: [], notificationsUnread: 0, currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'board', demandAiTab: 'submit', submitTab: 'quick', profileShowAll: false, profileTaskTab: 'review', globalKanbanUpdatedAt: null, workbenchFilter: 'all' };
+let state = { items: [], myWorkItems: [], users: [], metrics: {}, activity: [], insights: [], chatHistory: [], voiceDocs: [], meetingRecords: [], userProjects: [], userReviewProjects: [], notifications: [], notificationsUnread: 0, currentMeetingId: null, currentView: '', user: null, roleConfig: null, llmEnabled: false, aiStatus: null, recording: false, mediaRecorder: null, kanbanFilter: { flow: 'all', reviewer: '', executor: '' }, kanbanViewMode: 'board', demandAiTab: 'submit', submitTab: 'quick', profileShowAll: false, profileTaskTab: 'review', globalKanbanUpdatedAt: null, workbenchFilter: 'all', robotMessages: [], robotProposals: [], robotBusy: false };
 
 let liveSyncTimer = null;
 const LIVE_SYNC_MS = 3000;
@@ -76,6 +79,11 @@ function isMyReviewTask(item, userName = state.user?.name) {
   return item.reviewer === userName;
 }
 
+/** 超级管理员可管理任意任务；审核人仅可管理自己审核的任务 */
+function canLeadManageTask(item) {
+  return isAdminUser() || isMyReviewTask(item);
+}
+
 function leaderNavConfig(user = state.user) {
   const caps = user?.capabilities || [];
   if (!caps.includes('reviewer') && user?.role !== 'admin') return null;
@@ -84,6 +92,7 @@ function leaderNavConfig(user = state.user) {
       nav: [
         { id: 'team', label: '👥 团队管理' },
         { id: 'dashboard', label: '📊 全局看板' },
+        { id: 'robot', label: '🤖 工作机器人' },
         { id: 'profile', label: '👤 我的' },
         { id: 'taskcenter', label: '📋 任务中心' },
         { id: 'submit', label: '📤 提交需求' },
@@ -93,6 +102,7 @@ function leaderNavConfig(user = state.user) {
   }
   const nav = [
     { id: 'dashboard', label: '📊 全局看板' },
+    { id: 'robot', label: '🤖 工作机器人' },
     { id: 'profile', label: '👤 我的' },
     { id: 'taskcenter', label: '📋 任务中心' },
     { id: 'submit', label: '📤 提交需求' },
@@ -161,8 +171,31 @@ function sortByPriority(items = []) {
 
 function canEditTaskPriority(item) {
   if (!item || !state.user) return false;
+  if (isAdminUser()) return true;
   if (isReviewerUser()) return isMyReviewTask(item) || !item.reviewer;
   return item.assignee === state.user.name || (item.assistants || []).includes(state.user.name);
+}
+
+/** 提出人 / 审核人 / 主执行 / 协助（及管理员）可改标题、描述、预期时间；已归档允许，已终止除外 */
+function canEditTaskContent(item) {
+  if (!item || !state.user) return false;
+  if (item.status === 'terminated' && !isAdminUser()) return false;
+  if (isAdminUser()) return true;
+  const name = state.user.name;
+  return item.created_by === name
+    || item.reviewer === name
+    || item.assignee === name
+    || (item.assistants || []).includes(name);
+}
+
+function itemDeadlineValue(item) {
+  if (item?.deadline && /^\d{4}-\d{2}-\d{2}$/.test(String(item.deadline))) return String(item.deadline);
+  const m = (item?.description || '').match(/期望[：:]\s*(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : '';
+}
+
+function descriptionWithoutDeadline(desc) {
+  return String(desc || '').replace(/\n?期望[：:]\s*\d{4}-\d{2}-\d{2}/g, '').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function priorityBadgeHtml(item, { compact = false } = {}) {
@@ -216,6 +249,7 @@ async function refreshCurrentView() {
     taskcenter: renderTaskCenter, dashboard: renderDashboard, demandai: renderSubmit,
     mywork: renderMyWork, submit: renderSubmit, profile: renderProfile, team: renderTeam,
     kanban: renderTaskCenter, review: renderTaskCenter, acceptance: renderTaskCenter, ai: renderSubmit,
+    robot: renderRobot,
   };
   const render = renderers[view];
   if (!render) return;
@@ -390,7 +424,7 @@ function unreadNotifications(types) {
 
 function navAlertViews() {
   const views = new Set();
-  const unread = unreadNotifications(['blocked', 'terminated', 'assigned', 'completed', 'reassigned']);
+  const unread = unreadNotifications(['blocked', 'terminated', 'assigned', 'completed', 'reassigned', 'content_changed']);
   if (!unread.length) return views;
   // 领导红点在「我的」；纯执行人员红点在「今日工作台」
   if (isLeaderUser()) views.add('profile');
@@ -417,7 +451,7 @@ function updateNavAlerts() {
 }
 
 function renderAlertBanner(forView) {
-  const types = ['blocked', 'terminated', 'assigned', 'completed', 'reassigned'];
+  const types = ['blocked', 'terminated', 'assigned', 'completed', 'reassigned', 'content_changed'];
   const unread = unreadNotifications(types);
   if (!unread.length) return '';
   const kindMeta = {
@@ -426,6 +460,7 @@ function renderAlertBanner(forView) {
     assigned: { label: '新任务', cls: 'assigned' },
     completed: { label: '已完成', cls: 'completed' },
     reassigned: { label: '二次分配', cls: 'reassigned' },
+    content_changed: { label: '内容变更', cls: 'assigned' },
   };
   const rows = unread.slice(0, 8).map(n => {
     const meta = kindMeta[n.type] || { label: n.type, cls: 'assigned' };
@@ -500,7 +535,8 @@ function buildTopbar() {
     document.getElementById('btnNewItem')?.addEventListener('click', showNewItemModal);
     document.getElementById('btnDemand')?.addEventListener('click', () => { state.submitTab = 'quick'; navigate('submit'); });
   } else {
-    el.innerHTML = `<button class="btn btn-primary" id="btnNewItem">+ 上报进展</button>`;
+    el.innerHTML = `<button class="btn btn-ghost" id="btnRobot">🤖 工作机器人</button><button class="btn btn-primary" id="btnNewItem">+ 上报进展</button>`;
+    document.getElementById('btnRobot')?.addEventListener('click', () => navigate('robot'));
     document.getElementById('btnNewItem')?.addEventListener('click', () => navigate('mywork'));
   }
   document.getElementById('btnStandup')?.addEventListener('click', runStandup);
@@ -532,6 +568,8 @@ function showModal(title, html) {
 
 function closeModal() {
   document.getElementById('modalOverlay').classList.remove('show');
+  detailModalRef = null;
+  editingProgressKey = null;
 }
 
 // ── Renderers ──
@@ -539,7 +577,7 @@ function flowListActionsHtml(item) {
   const parts = [
     `<button type="button" class="btn btn-ghost btn-sm flow-list-action" title="查看详情" onclick="event.stopPropagation();showTaskDetailView('${item.id}')">详</button>`,
   ];
-  if (isMyReviewTask(item)) {
+  if (canLeadManageTask(item)) {
     const cat = flowCategory(item);
     if (cat === 'in_progress') {
       parts.push(`<button type="button" class="btn btn-ghost btn-sm flow-list-action flow-list-action--danger" title="终止执行" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">停</button>`);
@@ -559,7 +597,7 @@ function flowListActionsHtml(item) {
 }
 
 function leaderActionsHtml(item) {
-  if (!isMyReviewTask(item)) return '';
+  if (!canLeadManageTask(item)) return '';
   const cat = flowCategory(item);
   if (cat === 'in_progress') {
     return `<button type="button" class="btn btn-ghost btn-sm task-card-btn task-card-btn--danger" onclick="event.stopPropagation();reviewerTerminate('${item.id}')">⏹ 终止</button><button type="button" class="btn btn-primary btn-sm task-card-btn" onclick="event.stopPropagation();showReassignModal('${item.id}')">🔄 二次分配</button>`;
@@ -617,12 +655,22 @@ function goWorkflowBadge() {
 }
 
 function setDemandAiTab(tab) {
-  const map = { submit: 'quick', meeting: 'meeting', history: 'history', ai: 'quick', quick: 'quick' };
+  if (tab === 'ai' || tab === 'copilot') {
+    navigate('robot');
+    return;
+  }
+  const map = { submit: 'quick', meeting: 'meeting', history: 'history', quick: 'quick' };
   state.submitTab = map[tab] || 'quick';
   navigate('submit');
 }
 
 function setSubmitTab(tab) {
+  if (tab === 'ai' || tab === 'copilot') {
+    document.body.classList.remove('copilot-expanded');
+    navigate('robot');
+    return;
+  }
+  document.body.classList.remove('copilot-expanded');
   state.submitTab = tab;
   navigate('submit');
 }
@@ -636,6 +684,10 @@ function submitHubView() {
 }
 
 async function navigateSubmitHub(tab) {
+  if (tab === 'ai' || tab === 'copilot') {
+    await navigate('robot');
+    return;
+  }
   const map = { submit: 'quick', meeting: 'meeting', history: 'history', quick: 'quick' };
   state.submitTab = map[tab] || tab || 'quick';
   await navigate('submit');
@@ -721,11 +773,38 @@ function refreshKanbanContent() {
   const hint = document.getElementById('kanban-list-hint');
   if (!area) return;
   if (state.kanbanViewMode === 'board') {
+    const existing = document.getElementById('kanban');
+    // 已有看板：就地刷新各列并保留滚动位置，避免 3s 同步整页重绘导致“回弹”
+    if (existing) {
+      FLOW_COLS.forEach(col => {
+        const cards = sortByPriority(filtered.filter(i => flowCategory(i) === col.id));
+        const limit = WIP_LIMITS[col.id];
+        const overWip = limit != null && cards.length > limit;
+        const colEl = existing.querySelector(`.kanban-col[data-status="${col.id}"]`);
+        if (!colEl) return;
+        const header = colEl.querySelector('.kanban-col-header span:last-child');
+        if (header) {
+          header.innerHTML = `${overWip ? '<span class="wip-warn">WIP!</span> ' : ''}<span class="count">${kanbanColCountLabel(col.id, cards.length)}</span>`;
+        }
+        const cardsEl = colEl.querySelector('.kanban-cards');
+        if (!cardsEl) return;
+        const scrollTop = cardsEl.scrollTop;
+        cardsEl.innerHTML = cards.map(renderTaskCard).join('') || '<div class="kanban-empty">暂无任务</div>';
+        cardsEl.scrollTop = scrollTop;
+      });
+      if (hint) hint.textContent = `共 ${filtered.length} 项任务 · 四列看板 · ${isReviewerUser() ? '领导可拖拽移列' : '点击卡片查看详情'}`;
+      initDragDrop();
+      return;
+    }
     area.innerHTML = `<div class="kanban-page-board">${renderKanbanBoard(filtered)}</div>`;
     if (hint) hint.textContent = `共 ${filtered.length} 项任务 · 四列看板 · ${isReviewerUser() ? '领导可拖拽移列' : '点击卡片查看详情'}`;
     initDragDrop();
   } else {
+    const listEl = area.querySelector('.task-list-scroll, .project-table-wrap, .kanban-list-wrap');
+    const listScroll = listEl?.scrollTop ?? area.scrollTop ?? 0;
     area.innerHTML = renderKanbanListHtml(filtered);
+    const nextList = area.querySelector('.task-list-scroll, .project-table-wrap, .kanban-list-wrap') || area;
+    nextList.scrollTop = listScroll;
     if (hint) hint.textContent = `共 ${filtered.length} 项任务 · 点击列表行查看详情`;
   }
 }
@@ -971,7 +1050,8 @@ function activityIcon(action) {
     progress: '📤', created: '➕', status_change: '🔄', completed: '✅',
     dispatched: '🚀', reviewer_terminate: '⏹', reviewer_reassign: '🔁',
     reviewer_revoke: '↩', reviewer_reject: '↩', confirmed: '✔️', priority_changed: '🎯',
-    deleted: '🗑', auto_approved: '✅', auto_assigned: '🤖',
+    deleted: '🗑', auto_approved: '✅', auto_assigned: '🤖', content_changed: '✏️',
+    progress_edited: '✏️',
   }[action] || '•';
 }
 
@@ -1779,7 +1859,7 @@ function renderAcceptance() {
 }
 
 function renderDemandAI() {
-  // 全角色统一为「提交需求」三页签（快速提交 / 会议语音 / 提交记录）
+  // 全角色统一为「提交需求」四页签（快速提交 / 会议语音 / 提交记录 / AI 助手）
   return renderSubmit();
 }
 
@@ -1959,6 +2039,7 @@ function renderMyWork() {
       ${latest ? `<p class="work-card-latest">最近 (${latest.date})：${esc(latest.description?.slice(0, 60) || '')}</p>` : '<p class="work-card-latest work-card-latest--empty">今日尚未提交进展</p>'}
       <div class="form-group work-card-form"><textarea id="prog-desc-${i.id}" rows="2" placeholder="填写今日进展..."></textarea></div>
       <div class="work-card-actions">
+        <input type="date" id="prog-date-${i.id}" class="work-card-input" title="进展日期（留空=提交时的今日）">
         <select id="prog-blocker-${i.id}" class="work-card-select">${Object.entries(BLOCKER_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
         <input id="prog-blocker-desc-${i.id}" placeholder="卡点说明（可选）" class="work-card-input">
         <button type="button" class="btn btn-primary btn-sm" onclick="submitProgress('${i.id}')">📤 提交</button>
@@ -1974,6 +2055,7 @@ function renderMyWork() {
       ${renderWorkbenchSummaryChip('assist', '协助', assistAll.length)}
       ${renderWorkbenchSummaryChip('no_progress', '今日未报进展', noProgressItems.length, noProgressItems.length ? 'warn' : '')}
       ${renderWorkbenchSummaryChip('blocked', '阻塞', blockedAll.length, blockedAll.length ? 'danger' : '')}
+      <button type="button" class="btn btn-ghost btn-sm work-summary-action" onclick="navigate('robot')">🤖 工作机器人</button>
       <button type="button" class="btn btn-ghost btn-sm work-summary-action" onclick="navigate('submit')">📤 提交需求</button>
     </div>
     ${filter !== 'all' ? `<div class="work-filter-hint">当前筛选：<strong>${workbenchFilterLabel(filter)}</strong>（${visibleCount} 项）· <button type="button" class="btn btn-ghost btn-sm" onclick="setWorkbenchFilter('all')">清除筛选</button></div>` : ''}
@@ -1984,10 +2066,206 @@ function renderMyWork() {
     <div class="work-done-hint">已完成 ${done.length} 项 · <button type="button" class="btn btn-ghost btn-sm" onclick="navigate('profile')">在我的记录中查看</button></div>`;
 }
 
+function renderRobotProposalCard(p) {
+  const e = p.entry || {};
+  const title = e.task_title || e.task_text || '未命名';
+  const conf = Math.round((e.confidence || 0) * 100);
+  const cands = p.candidates || [];
+  const prefer = p.prefer_action || 'progress';
+  const bindOptions = [
+    ...cands.map((c, idx) => {
+      const label = `${c.req_no ? c.req_no + ' ' : ''}${c.title}（匹配 ${c.score}）`;
+      const sel = idx === 0 && prefer !== 'create' ? 'selected' : '';
+      return `<option value="${esc(c.id)}" ${sel}>${esc(label)}</option>`;
+    }),
+    `<option value="new" ${prefer === 'create' || !cands.length ? 'selected' : ''}>＋ 新建任务</option>`,
+  ].join('');
+  const statusVal = e.status === 'done' || prefer === 'archive' ? 'done'
+    : (e.status === 'blocked' || prefer === 'blocked' ? 'blocked' : 'doing');
+  return `<div class="robot-proposal-card" data-proposal-id="${esc(p.id)}">
+    <div class="robot-proposal-head">
+      <strong>${esc(title)}</strong>
+      <span class="robot-conf">置信度 ${conf}%</span>
+    </div>
+    <div class="robot-proposal-fields">
+      ${cands.length ? `<label>绑定到任务
+        <select id="rp-bind-${p.id}">${bindOptions}</select>
+      </label>` : ''}
+      <label>意图
+        <select id="rp-prefer-${p.id}">
+          <option value="progress" ${prefer === 'progress' ? 'selected' : ''}>记进展</option>
+          <option value="archive" ${prefer === 'archive' ? 'selected' : ''}>完成归档</option>
+          <option value="blocked" ${prefer === 'blocked' ? 'selected' : ''}>标为阻塞</option>
+          <option value="create" ${prefer === 'create' ? 'selected' : ''}>新建任务</option>
+        </select>
+      </label>
+      <label>项目 <input id="rp-proj-${p.id}" value="${esc(e.project_ref || '')}" placeholder="可选"></label>
+      <label>任务名 <input id="rp-title-${p.id}" value="${esc(e.task_title || e.task_text || '')}"></label>
+      <label>说明 <input id="rp-text-${p.id}" value="${esc(e.task_text || '')}"></label>
+      <label>状态
+        <select id="rp-status-${p.id}">
+          <option value="doing" ${statusVal === 'doing' ? 'selected' : ''}>进行中</option>
+          <option value="done" ${statusVal === 'done' ? 'selected' : ''}>已完成</option>
+          <option value="blocked" ${statusVal === 'blocked' ? 'selected' : ''}>阻塞</option>
+        </select>
+      </label>
+      <label>卡点 <input id="rp-blocker-${p.id}" value="${esc(e.blocker_text || '')}" placeholder="可选"></label>
+    </div>
+    <div class="robot-proposal-actions">
+      <button type="button" class="btn btn-primary btn-sm" onclick="confirmRobotProposal('${p.id}','accept')">确认</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="confirmRobotProposal('${p.id}','reject')">忽略</button>
+    </div>
+  </div>`;
+}
+
+function renderRobotMessagesHtml() {
+  const msgs = state.robotMessages || [];
+  if (!msgs.length) {
+    return `<div class="chat-msg assistant">你好！我可以自主完成三件事：
+
+① 进展归档：对已有任务汇报进展；说「完成了」会自动归档
+② 新建任务：识别「新任务 / 谁安排我做…」并入库
+③ 问答：问「我的任务有什么」「有哪些阻塞」等
+
+示例：
+· FDE平台今天注入了机器人功能
+· 注入机器人功能已完成
+· 林宇飞给了我新任务，让我搭建电动飞机智能优化平台
+· 我的任务有什么</div>`;
+  }
+  return msgs.map(m => {
+    const role = m.role === 'user' ? 'user' : 'assistant';
+    return `<div class="chat-msg ${role}">${esc(m.content)}</div>`;
+  }).join('');
+}
+
+function renderRobot() {
+  const proposals = state.robotProposals || [];
+  return `
+    <div class="robot-page">
+      <div class="card robot-hero">
+        <div>
+          <h3 style="margin:0 0 0.35rem">🤖 工作机器人</h3>
+          <p class="robot-lead">自主：已有任务进展归档 · 新建任务识别 · 问题识别与回答。</p>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="navigate('mywork')">返回工作台</button>
+      </div>
+      <div class="robot-layout">
+        <div class="card robot-chat-panel">
+          <div class="chat-box robot-chat-box">
+            <div class="chat-messages" id="robotChatMessages">${renderRobotMessagesHtml()}</div>
+            <div class="chat-input-row robot-input-row">
+              <textarea id="robotChatInput" rows="2" placeholder="汇报进展、说新任务，或直接提问…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendRobotChat();}"></textarea>
+              <button class="btn btn-primary" id="robotSendBtn" onclick="sendRobotChat()" ${state.robotBusy ? 'disabled' : ''}>${state.robotBusy ? '处理中…' : '发送'}</button>
+            </div>
+          </div>
+        </div>
+        <div class="card robot-side-panel">
+          <h4 class="robot-side-title">待确认（${proposals.length}）</h4>
+          ${proposals.length
+            ? proposals.map(renderRobotProposalCard).join('')
+            : '<p class="robot-side-empty">低置信新建或中分匹配会进入确认；高分匹配会直接记进展/归档。</p>'}
+          <h4 class="robot-side-title" style="margin-top:1.25rem">快捷话术</h4>
+          <div class="robot-chips">
+            <button type="button" class="robot-chip" onclick="fillRobotExample('FDE平台我今天注入了机器人功能')">进展汇报</button>
+            <button type="button" class="robot-chip" onclick="fillRobotExample('注入机器人功能已完成')">完成归档</button>
+            <button type="button" class="robot-chip" onclick="fillRobotExample('林宇飞给了我新任务，让我搭建电动飞机智能优化平台')">新建任务</button>
+            <button type="button" class="robot-chip" onclick="fillRobotExample('我的任务有什么')">任务问答</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadRobotHistory() {
+  try {
+    const data = await api('/robot/history');
+    state.robotMessages = data.messages || [];
+    state.robotProposals = data.proposals || [];
+  } catch {
+    state.robotMessages = state.robotMessages || [];
+    state.robotProposals = state.robotProposals || [];
+  }
+}
+
+function fillRobotExample(text) {
+  const el = document.getElementById('robotChatInput');
+  if (el) { el.value = text; el.focus(); }
+}
+
+function scrollRobotChat() {
+  const box = document.getElementById('robotChatMessages');
+  if (box) box.scrollTop = box.scrollHeight;
+}
+
+async function sendRobotChat() {
+  const input = document.getElementById('robotChatInput');
+  const q = (input?.value || '').trim();
+  if (!q || state.robotBusy) return;
+  state.robotBusy = true;
+  if (input) input.value = '';
+  state.robotMessages = [...(state.robotMessages || []), { role: 'user', content: q, created_at: new Date().toISOString() }];
+  if (state.currentView === 'robot') {
+    document.getElementById('content').innerHTML = renderRobot();
+    scrollRobotChat();
+  }
+  try {
+    const result = await api('/robot/chat', { method: 'POST', body: { message: q } });
+    if (result.messages?.length) {
+      state.robotMessages = [...(state.robotMessages || []).slice(0, -1), ...result.messages];
+    } else {
+      state.robotMessages = [...(state.robotMessages || []), { role: 'assistant', content: result.reply || '已处理' }];
+    }
+    await loadRobotHistory();
+    toast(result.applied?.length ? `已入库 ${result.applied.length} 条` : '已梳理');
+  } catch (e) {
+    state.robotMessages = [...(state.robotMessages || []), { role: 'assistant', content: `处理失败：${e.message || '未知错误'}` }];
+    toast(e.message || '发送失败', 'error');
+  } finally {
+    state.robotBusy = false;
+    if (state.currentView === 'robot') {
+      document.getElementById('content').innerHTML = renderRobot();
+      scrollRobotChat();
+    }
+  }
+}
+
+async function confirmRobotProposal(proposalId, action) {
+  const patch = {};
+  if (action === 'accept' || action === 'edit') {
+    patch.project_ref = document.getElementById(`rp-proj-${proposalId}`)?.value?.trim() || null;
+    patch.task_title = document.getElementById(`rp-title-${proposalId}`)?.value?.trim() || undefined;
+    patch.task_text = document.getElementById(`rp-text-${proposalId}`)?.value?.trim() || undefined;
+    patch.status = document.getElementById(`rp-status-${proposalId}`)?.value || 'doing';
+    patch.blocker_text = document.getElementById(`rp-blocker-${proposalId}`)?.value?.trim() || null;
+    const bindEl = document.getElementById(`rp-bind-${proposalId}`);
+    if (bindEl) patch.bind_item_id = bindEl.value || 'new';
+    const preferEl = document.getElementById(`rp-prefer-${proposalId}`);
+    if (preferEl) patch.prefer_action = preferEl.value;
+    if (patch.prefer_action === 'create') patch.bind_item_id = 'new';
+    if (patch.prefer_action === 'archive') patch.status = 'done';
+    if (patch.prefer_action === 'blocked') patch.status = 'blocked';
+    action = 'accept';
+  }
+  try {
+    const result = await api('/robot/confirm', { method: 'POST', body: { proposal_id: proposalId, action, patch } });
+    toast(result.reply || (action === 'accept' ? '已确认' : '已忽略'));
+    await loadRobotHistory();
+    if (state.currentView === 'robot') {
+      document.getElementById('content').innerHTML = renderRobot();
+      scrollRobotChat();
+    }
+  } catch (e) {
+    toast(e.message || '操作失败', 'error');
+  }
+}
+
 function renderSubmitFormFields() {
   const ai = state.aiStatus || {};
   const reviewers = state.users.filter(u => (u.capabilities || []).includes('reviewer'));
-  const executors = state.users.filter(u => (u.capabilities || []).includes('executor') && !(u.capabilities || []).includes('reviewer'));
+  // 兼具审核能力的人也可被选为执行人员
+  const executors = state.users.filter(u => (u.capabilities || []).includes('executor'));
+  reqExecutorOrder = [];
   return `
     <div class="submit-step card">
       <div class="form-group"><label>需求标题</label><input id="reqTitle" placeholder="简要描述您的需求"></div>
@@ -2002,16 +2280,16 @@ function renderSubmitFormFields() {
         </select>
       </div>
       <div class="form-group">
-        <label>执行人员 <span id="reqExecutorHint" class="req-executor-hint">请勾选执行人员 · 第一位为主执行</span></label>
+        <label>执行人员 <span id="reqExecutorHint" class="req-executor-hint">请勾选执行人员 · 第一个点击的为主执行</span></label>
         <div id="reqExecutors" class="req-executor-list">
           ${executors.map(e => `
             <label class="req-executor-option">
-              <input type="checkbox" value="${esc(e.name)}" onchange="onExecutorCheck()">
+              <input type="checkbox" value="${esc(e.name)}" onchange="onExecutorCheck(this)">
               <span class="req-executor-name">${esc(e.name)} <em>(${esc(userDeptLabel(e))})</em></span>
               <span class="req-executor-role" hidden>主执行</span>
             </label>`).join('')}
         </div>
-        <p class="req-executor-tip">按勾选顺序：第 1 人为主执行，其后为协助；人数由勾选自动确定。</p>
+        <p class="req-executor-tip">按点击顺序：第一个勾选的人为主执行，其后为协助；人数由勾选自动确定。</p>
       </div>
       <button class="btn btn-primary" onclick="submitRequirement()">📤 提交需求</button>
       <p style="font-size:0.72rem;color:var(--muted);margin-top:0.5rem">提交后自动进入执行，并通知审核人与执行人员 · ${ai.llm ? ai.llm.provider : '未配置 LLM'}</p>
@@ -2019,10 +2297,17 @@ function renderSubmitFormFields() {
 }
 
 function renderSubmitQuickPanel() {
-  return `${renderSubmitFormFields()}
-    <div class="card submit-copilot" style="margin-top:1rem">
-      <h3>💬 AI 助手</h3>
-      <div class="chat-box">
+  return renderSubmitFormFields();
+}
+
+function renderSubmitCopilotPanel() {
+  return `
+    <div class="card submit-copilot" id="submitCopilotPanel">
+      <div class="submit-copilot-head">
+        <h3>💬 AI 助手</h3>
+        <button type="button" class="btn btn-ghost btn-sm" id="submitCopilotExpandBtn" onclick="toggleSubmitCopilotExpand()" title="放大对话区域">⛶ 放大</button>
+      </div>
+      <div class="chat-box" id="submitChatBox">
         <div class="chat-messages" id="submitChatMessages"><div class="chat-msg assistant">可帮你完善需求描述与验收标准。</div></div>
         <div class="chat-input-row">
           <input id="submitChatInput" placeholder="询问 AI..." onkeydown="if(event.key==='Enter')sendSubmitChat()">
@@ -2032,9 +2317,27 @@ function renderSubmitQuickPanel() {
     </div>`;
 }
 
+function toggleSubmitCopilotExpand(force) {
+  const panel = document.getElementById('submitCopilotPanel');
+  if (!panel) return;
+  const on = force != null ? !!force : !panel.classList.contains('is-expanded');
+  panel.classList.toggle('is-expanded', on);
+  document.body.classList.toggle('copilot-expanded', on);
+  const btn = document.getElementById('submitCopilotExpandBtn');
+  if (btn) {
+    btn.textContent = on ? '✕ 退出全屏' : '⛶ 放大';
+    btn.title = on ? '退出全屏' : '放大对话区域';
+  }
+  const box = document.getElementById('submitChatMessages');
+  if (box) box.scrollTop = box.scrollHeight;
+}
+
 function renderSubmitMeetingPanel() {
   const records = state.meetingRecords || [];
   const current = records.find(r => r.id === state.currentMeetingId);
+  const selectedHint = current
+    ? `当前选中：${current.title || '未命名记录'}（可点列表切换）`
+    : (records.length ? '请先在下方列表中点选一条会议记录，再进行 AI 拆解' : '暂无记录，请先保存或上传');
   return `
     <div class="submit-step card">
       <p style="color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem">上传语音/文档或粘贴会议纪要，AI 拆解后自动填入需求表单。</p>
@@ -2050,15 +2353,22 @@ function renderSubmitMeetingPanel() {
         <input type="file" id="meetDocInput" accept=".txt,.md,.pdf,.docx,text/*,application/pdf" hidden>
       </div>
       <div class="meeting-record-status" id="meetingRecordStatus"></div>
-      <div class="section-title" style="font-size:0.85rem;margin:0.75rem 0 0.35rem">我的会议记录</div>
+      <div class="section-title" style="font-size:0.85rem;margin:0.75rem 0 0.35rem">我的会议记录 <span style="font-weight:400;color:var(--muted)">（先选择再拆解）</span></div>
+      <div class="meeting-selected-hint ${current ? 'is-selected' : ''}">${esc(selectedHint)}</div>
       <div class="meeting-records" id="meetingRecordsList">
         ${records.length ? records.map(r => `
           <div class="meeting-record-item ${r.id === state.currentMeetingId ? 'active' : ''}" onclick="selectMeetingRecord('${r.id}')">
-            <div>${esc(r.title || r.summary?.slice(0, 40) || '会议记录')}</div>
-            <div class="meta">${fmtTime(r.created_at)} · ${esc(r.source_type || 'text')}${r.status === 'parsed' ? ' · 已拆解' : ''}</div>
+            <span class="meeting-record-radio" aria-hidden="true"></span>
+            <div class="meeting-record-main">
+              <div>${esc(r.title || r.summary?.slice(0, 40) || '会议记录')}</div>
+              <div class="meta">${fmtTime(r.created_at)} · ${esc(r.source_type || 'text')}${r.status === 'parsed' ? ' · 已拆解' : ''}${r.id === state.currentMeetingId ? ' · 已选中' : ''}</div>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm meeting-record-del" title="删除我的会议记录" onclick="event.stopPropagation();deleteMeetingRecord('${r.id}')">🗑</button>
           </div>`).join('') : '<div class="empty-state" style="padding:0.5rem">暂无会议记录，可粘贴内容或上传语音/文档</div>'}
       </div>
-      <button class="btn btn-primary" style="width:100%;margin-top:0.75rem" onclick="parseMeetingToForm(true)" ${!state.currentMeetingId ? 'disabled' : ''}>🤖 AI 拆解并填入表单</button>
+      <button class="btn btn-primary" style="width:100%;margin-top:0.75rem" onclick="parseMeetingToForm(true)" ${!state.currentMeetingId ? 'disabled' : ''}>
+        🤖 AI 拆解并填入表单${current ? `（${esc((current.title || '').slice(0, 18))}${(current.title || '').length > 18 ? '…' : ''}）` : ''}
+      </button>
     </div>`;
 }
 
@@ -2096,12 +2406,18 @@ function renderSubmitBody() {
 }
 
 function renderSubmit() {
-  const tab = state.submitTab || 'quick';
+  const tab = state.submitTab === 'ai' || state.submitTab === 'copilot' ? 'quick' : (state.submitTab || 'quick');
+  if (state.submitTab === 'ai' || state.submitTab === 'copilot') state.submitTab = 'quick';
   return `
     <div class="page-tabs">
       <button type="button" class="page-tab ${tab === 'quick' ? 'active' : ''}" onclick="setSubmitTab('quick')">⚡ 快速提交</button>
       <button type="button" class="page-tab ${tab === 'meeting' ? 'active' : ''}" onclick="setSubmitTab('meeting')">🎙️ 会议/语音</button>
       <button type="button" class="page-tab ${tab === 'history' ? 'active' : ''}" onclick="setSubmitTab('history')">📋 提交记录</button>
+    </div>
+    <div class="submit-ai-redirect card">
+      <span>💬 原「AI 助手」已合并到</span>
+      <button type="button" class="btn btn-primary btn-sm" onclick="navigate('robot')">工作机器人</button>
+      <span class="submit-ai-redirect-hint">可汇报入库、问答任务、完善需求与验收标准</span>
     </div>
     <div class="page-tab-panel">
       ${tab === 'quick' ? renderSubmitQuickPanel() : ''}
@@ -2133,17 +2449,17 @@ function renderReview() {
         ${updates.map(u => `<div style="padding:0.2rem 0;border-bottom:1px solid var(--border)"><strong>${u.date}</strong> ${esc(u.user)}: ${esc(u.description?.slice(0, 60) || '')}</div>`).join('')}
       </div>` : ''}
       <div class="accept-actions" style="flex-wrap:wrap;gap:0.5rem">
-        ${mode === 'active' && isMyReviewTask(i) ? `
+        ${mode === 'active' && canLeadManageTask(i) ? `
           <button class="btn btn-ghost btn-sm" onclick="reviewerTerminate('${i.id}')" style="border-color:var(--danger);color:var(--danger)">⏹ 终止</button>
           <button class="btn btn-primary btn-sm" onclick="showReassignModal('${i.id}')">🔄 二次分配</button>
         ` : ''}
-        ${mode === 'blocked' && isMyReviewTask(i) ? `
+        ${mode === 'blocked' && canLeadManageTask(i) ? `
           <button class="btn btn-primary btn-sm" onclick="showReassignModal('${i.id}')">🔄 二次分配</button>
         ` : ''}
-        ${mode === 'completed' && isMyReviewTask(i) ? `
+        ${mode === 'completed' && canLeadManageTask(i) ? `
           <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:${STAR_GOLD};color:#6b5410">↩ 退回执行中</button>
         ` : ''}
-        ${mode === 'terminated' && isMyReviewTask(i) ? `
+        ${mode === 'terminated' && canLeadManageTask(i) ? `
           <button class="btn btn-ghost btn-sm" onclick="reviewerRevoke('${i.id}')" style="border-color:${STAR_GOLD};color:#6b5410">↩ 退回执行中</button>
         ` : ''}
       </div>
@@ -2314,7 +2630,51 @@ function buildTaskDetailText(item) {
   return lines.join('\r\n');
 }
 
-function renderTaskProgressTimeline(updates = []) {
+/** 当前弹窗引用，便于进展编辑后就地重绘 */
+let detailModalRef = null;
+/** 正在编辑的进展记录：`${itemId}:${updateId}` */
+let editingProgressKey = null;
+
+function canEditProgressUpdate(item, update) {
+  if (!item || !update || !state.user) return false;
+  return state.user.role === 'admin' || update.user === state.user.name;
+}
+
+function renderProgressItem(update, item) {
+  const u = update;
+  const editing = !!item && editingProgressKey === `${item.id}:${u.id}`;
+  if (editing) {
+    return `<div class="task-progress-item task-progress-item--editing">
+      <div class="task-progress-meta"><strong>修改进展</strong><span>${esc(u.user || '未知')}</span></div>
+      <div class="form-group"><label>进展日期</label><input id="peDate" type="date" value="${esc(u.date || '')}"></div>
+      <div class="form-group"><label>进展描述</label><textarea id="peDesc" rows="3">${esc(u.description || '')}</textarea></div>
+      <div class="progress-edit-row">
+        <select id="peBlockerType">${Object.entries(BLOCKER_TYPES).map(([k, v]) => `<option value="${k}" ${((u.blocker_type || 'none') === k) ? 'selected' : ''}>${v}</option>`).join('')}</select>
+        <input id="peBlockerDesc" placeholder="卡点说明（可选）" value="${esc(u.blocker_desc || '')}">
+      </div>
+      <div class="progress-edit-actions">
+        <button type="button" class="btn btn-primary btn-sm" onclick="saveProgressEdit('${item.id}', '${u.id}')">💾 保存</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="cancelProgressEdit()">取消</button>
+      </div>
+    </div>`;
+  }
+  const editBtn = canEditProgressUpdate(item, u)
+    ? `<button type="button" class="btn btn-ghost btn-sm" onclick="startProgressEdit('${item.id}', '${u.id}')">✏️ 修改</button>`
+    : '';
+  const editedNote = u.edited_at ? `<span class="task-progress-edited">已于 ${esc(fmtTime(u.edited_at))} 修改</span>` : '';
+  return `<div class="task-progress-item">
+    <div class="task-progress-meta">
+      <strong>${esc(u.date || (u.created_at ? fmtTime(u.created_at).split(/\s/)[0] : ''))}</strong>
+      <span>${esc(u.user || '未知')}</span>
+      ${u.created_at ? `<span class="task-progress-time">${fmtTime(u.created_at)}</span>` : ''}
+    </div>
+    <div class="task-progress-desc">${esc(u.description || '（无文字说明）')}</div>
+    ${u.blocker_type && u.blocker_type !== 'none' ? `<div class="task-progress-blocker">${BLOCKER_ICONS[u.blocker_type] || '🚧'} ${esc(BLOCKER_TYPES[u.blocker_type] || u.blocker_type)}${u.blocker_desc ? `：${esc(u.blocker_desc)}` : ''}</div>` : ''}
+    ${editBtn || editedNote ? `<div class="task-progress-actions">${editBtn}${editedNote}</div>` : ''}
+  </div>`;
+}
+
+function renderTaskProgressTimeline(updates = [], item = null) {
   if (!updates.length) {
     return `<div class="task-progress-section">
       <div class="section-title">📅 每日进展提交记录</div>
@@ -2324,22 +2684,57 @@ function renderTaskProgressTimeline(updates = []) {
   return `<div class="task-progress-section">
     <div class="section-title">📅 每日进展提交记录 <span class="task-progress-count">${updates.length} 条</span></div>
     <div class="task-progress-timeline">
-      ${updates.map(u => `<div class="task-progress-item">
-        <div class="task-progress-meta">
-          <strong>${esc(u.date || (u.created_at ? fmtTime(u.created_at).split(/\s/)[0] : ''))}</strong>
-          <span>${esc(u.user || '未知')}</span>
-          ${u.created_at ? `<span class="task-progress-time">${fmtTime(u.created_at)}</span>` : ''}
-        </div>
-        <div class="task-progress-desc">${esc(u.description || '（无文字说明）')}</div>
-        ${u.blocker_type && u.blocker_type !== 'none' ? `<div class="task-progress-blocker">${BLOCKER_ICONS[u.blocker_type] || '🚧'} ${esc(BLOCKER_TYPES[u.blocker_type] || u.blocker_type)}${u.blocker_desc ? `：${esc(u.blocker_desc)}` : ''}</div>` : ''}
-      </div>`).join('')}
+      ${updates.map(u => renderProgressItem(u, item)).join('')}
     </div>
   </div>`;
+}
+
+function rerenderDetailModal() {
+  if (!detailModalRef) return;
+  if (detailModalRef.kind === 'view') showTaskDetailView(detailModalRef.id);
+  else showItemDetail(detailModalRef.id);
+}
+
+function startProgressEdit(itemId, updateId) {
+  editingProgressKey = `${itemId}:${updateId}`;
+  rerenderDetailModal();
+}
+
+function cancelProgressEdit() {
+  editingProgressKey = null;
+  rerenderDetailModal();
+}
+
+async function saveProgressEdit(itemId, updateId) {
+  const item = state.items.find(i => i.id === itemId);
+  const update = (item?.progress_updates || []).find(u => u.id === updateId);
+  if (!update) return toast('进展记录不存在', 'error');
+  const description = (document.getElementById('peDesc')?.value || '').trim();
+  const blocker_type = document.getElementById('peBlockerType')?.value || 'none';
+  const blocker_desc = (document.getElementById('peBlockerDesc')?.value || '').trim();
+  const date = document.getElementById('peDate')?.value || update.date;
+  if (!description && blocker_type === 'none') {
+    return toast('请填写进展描述或选择卡点类型', 'error');
+  }
+  try {
+    const result = await api(`/items/${itemId}/progress/${updateId}`, {
+      method: 'PATCH',
+      body: { description, blocker_type, blocker_desc, date },
+    });
+    if (result?.item) syncItemInState(result.item);
+    if (result?.activity) prependActivityInState(result.activity);
+    editingProgressKey = null;
+    toast('进展已修改');
+    rerenderDetailModal();
+  } catch (e) {
+    toast(e.message || '进展修改失败', 'error');
+  }
 }
 
 function showTaskDetailView(id) {
   const item = state.items.find(i => i.id === id);
   if (!item) return toast('任务不存在', 'error');
+  detailModalRef = { kind: 'view', id };
   recordTaskCheckView(id);
   const meta = projectStatusMeta(item);
   const end = taskEndTime(item);
@@ -2363,12 +2758,13 @@ function showTaskDetailView(id) {
         <span>结束：${end ? fmtTime(end) : '-'}</span>
       </div>
       <div class="task-detail-block"><strong>任务描述</strong><p>${esc(item.description || '无描述')}</p></div>
+      ${itemDeadlineValue(item) ? `<div class="task-detail-block"><strong>预期时间</strong><p>${esc(itemDeadlineValue(item))}</p></div>` : ''}
       ${item.acceptance_criteria ? `<div class="task-detail-block"><strong>验收标准</strong><pre class="task-detail-pre">${esc(item.acceptance_criteria)}</pre></div>` : ''}
       ${item.blocked_reason ? `<div class="task-detail-block task-detail-block--danger"><strong>阻塞原因</strong><p>${BLOCKER_ICONS[item.blocker_type] || '🚧'} ${esc(item.blocked_reason)}</p></div>` : ''}
-      ${renderTaskProgressTimeline(item.progress_updates || [])}
+      ${renderTaskProgressTimeline(item.progress_updates || [], item)}
       <div class="task-detail-actions">
         <button type="button" class="btn btn-ghost" onclick="downloadTaskDetail('${id}')">📥 下载详情</button>
-        ${isReviewerUser() ? `<button type="button" class="btn btn-primary" onclick="closeModal();showItemDetail('${id}')">✏️ 编辑任务</button>` : ''}
+        ${canEditTaskContent(item) || isReviewerUser() ? `<button type="button" class="btn btn-primary" onclick="closeModal();showItemDetail('${id}')">✏️ 编辑任务</button>` : ''}
       </div>
     </div>
   `);
@@ -2954,11 +3350,17 @@ async function processAiDocument(file) {
 // ── Actions ──
 async function navigate(view) {
   if (view === 'voice') view = 'submit';
-  if (view === 'demandai' || view === 'ai') {
+  if (view === 'ai') view = 'robot';
+  if (view === 'demandai') {
     if (state.demandAiTab === 'meeting') state.submitTab = 'meeting';
     else if (state.demandAiTab === 'history') state.submitTab = 'history';
-    else state.submitTab = state.submitTab || 'quick';
-    view = 'submit';
+    else if (state.demandAiTab === 'ai' || state.demandAiTab === 'copilot') {
+      view = 'robot';
+    } else {
+      state.submitTab = state.submitTab || 'quick';
+      view = 'submit';
+    }
+    if (view !== 'robot') view = 'submit';
   }
   if (view === 'kanban' || view === 'review' || view === 'acceptance') {
     if (view === 'review') state.kanbanFilter = { flow: 'in_progress', reviewer: '', executor: '' };
@@ -2973,10 +3375,12 @@ async function navigate(view) {
     demandai: '提交需求', mywork: '今日工作台', submit: '提交需求',
     profile: isReviewerUser() ? '我的' : '我的记录', team: isAdminUser() ? '团队管理' : '团队',
     kanban: '任务中心', review: '任务中心', acceptance: '任务中心', ai: '提交需求',
+    robot: '工作机器人',
   };
   document.getElementById('pageTitle').textContent = titles[view] || view;
   await loadData();
   if (view === 'submit' || view === 'demandai') await loadMeetingRecords();
+  if (view === 'robot') await loadRobotHistory();
   if (view === 'mywork' || view === 'taskcenter') {
     const isExecutor = (state.user?.capabilities || []).includes('executor');
     if (isExecutor) {
@@ -2994,6 +3398,7 @@ async function navigate(view) {
     taskcenter: renderTaskCenter, dashboard: renderDashboard, demandai: renderSubmit,
     mywork: renderMyWork, submit: renderSubmit, profile: renderProfile, team: renderTeam,
     kanban: renderTaskCenter, review: renderTaskCenter, acceptance: renderTaskCenter, ai: renderSubmit,
+    robot: renderRobot,
   };
   document.getElementById('content').innerHTML = renderers[view] ? renderers[view]() : '<div class="empty-state">页面不存在</div>';
   if (view === 'dashboard' && isReviewerUser()) startLiveSyncPolling();
@@ -3032,7 +3437,7 @@ async function moveItem(id, newCategory) {
     return;
   }
   const item = state.items.find(i => i.id === id);
-  if (item?.reviewer && !isMyReviewTask(item)) {
+  if (item?.reviewer && !canLeadManageTask(item)) {
     toast('只能移动自己审核的任务', 'error');
     return;
   }
@@ -3137,22 +3542,23 @@ function initDragDrop() {
 function showReassignModal(id) {
   const item = state.items.find(i => i.id === id);
   if (!item) return;
-  if (!isMyReviewTask(item)) return toast('只能对自己审核的任务进行二次分配', 'error');
-  const executors = state.users.filter(u => (u.capabilities || []).includes('executor') && !(u.capabilities || []).includes('reviewer'));
-  const selected = new Set([item.assignee, ...(item.assistants || [])].filter(Boolean));
+  if (!canLeadManageTask(item)) return toast('无权修改该任务的执行人员', 'error');
+  const executors = state.users.filter(u => (u.capabilities || []).includes('executor'));
+  const selected = [item.assignee, ...(item.assistants || [])].filter(Boolean);
+  reassignExecutorOrder = [...selected];
   showModal('二次分配 · ' + item.title, `
     <p style="color:var(--muted);font-size:0.85rem;margin-bottom:0.75rem">当前主执行: <strong>${esc(item.assignee || '未分配')}</strong>${item.blocked_reason ? `<br>阻塞原因: ${esc(item.blocked_reason)}` : ''}</p>
     <div class="form-group">
-      <label>执行人员 <span id="reassignExecutorHint" class="req-executor-hint">请勾选执行人员 · 第一位为主执行</span></label>
+      <label>执行人员 <span id="reassignExecutorHint" class="req-executor-hint">请勾选执行人员 · 第一个点击的为主执行</span></label>
       <div id="reassignExecutors" class="req-executor-list">
         ${executors.map(e => `
           <label class="req-executor-option">
-            <input type="checkbox" value="${esc(e.name)}" ${selected.has(e.name) ? 'checked' : ''} onchange="refreshReassignExecutorUI()">
+            <input type="checkbox" value="${esc(e.name)}" ${selected.includes(e.name) ? 'checked' : ''} onchange="onReassignExecutorCheck(this)">
             <span class="req-executor-name">${esc(e.name)} <em>(${esc(userDeptLabel(e))})</em></span>
             <span class="req-executor-role" hidden>主执行</span>
           </label>`).join('')}
       </div>
-      <p class="req-executor-tip">按勾选顺序：第 1 人为主执行，其后为协助；人数由勾选自动确定。</p>
+      <p class="req-executor-tip">按点击顺序：第一个勾选的人为主执行，其后为协助；人数由勾选自动确定。</p>
     </div>
     <div class="form-group"><label>备注（可选）</label><input id="reassignComment" placeholder="分配说明..."></div>
     <button class="btn btn-primary" style="width:100%" onclick="reviewerReassign('${id}')">确认二次分配</button>
@@ -3160,40 +3566,73 @@ function showReassignModal(id) {
   setTimeout(refreshReassignExecutorUI, 0);
 }
 
-function getSelectedReassignExecutors() {
-  const box = document.getElementById('reassignExecutors');
-  if (!box) return [];
-  return Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map(el => el.value);
+function trackExecutorOrder(order, el) {
+  const name = el?.value;
+  if (!name) return order;
+  if (el.checked) {
+    if (!order.includes(name)) order.push(name);
+    return order;
+  }
+  return order.filter(n => n !== name);
 }
 
-function refreshReassignExecutorUI() {
-  const box = document.getElementById('reassignExecutors');
-  const hint = document.getElementById('reassignExecutorHint');
-  const checked = box ? Array.from(box.querySelectorAll('input[type="checkbox"]:checked')) : [];
-  checked.forEach((el, idx) => {
+function getOrderedCheckedExecutors(boxId, order) {
+  const box = document.getElementById(boxId);
+  if (!box) return [];
+  const checked = new Set(
+    Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map(el => el.value)
+  );
+  const ordered = order.filter(name => checked.has(name));
+  // 兜底：已勾选但不在顺序里的（异常情况）追加到末尾
+  checked.forEach(name => {
+    if (!ordered.includes(name)) ordered.push(name);
+  });
+  return ordered;
+}
+
+function applyExecutorRoleUI(boxId, hintId, orderedNames) {
+  const box = document.getElementById(boxId);
+  const hint = document.getElementById(hintId);
+  const primary = orderedNames[0] || null;
+  box?.querySelectorAll('input[type="checkbox"]').forEach(el => {
     const label = el.closest('.req-executor-option');
-    label?.classList.toggle('is-primary', idx === 0);
-    label?.classList.toggle('is-checked', true);
     const role = label?.querySelector('.req-executor-role');
+    const idx = orderedNames.indexOf(el.value);
+    const checked = el.checked;
+    label?.classList.toggle('is-primary', checked && el.value === primary);
+    label?.classList.toggle('is-checked', checked);
     if (role) {
-      role.hidden = false;
-      role.textContent = idx === 0 ? '主执行' : `协助${idx}`;
+      if (!checked || idx < 0) {
+        role.hidden = true;
+      } else {
+        role.hidden = false;
+        role.textContent = idx === 0 ? '主执行' : `协助${idx}`;
+      }
     }
   });
-  box?.querySelectorAll('input[type="checkbox"]:not(:checked)').forEach(el => {
-    const label = el.closest('.req-executor-option');
-    label?.classList.remove('is-primary', 'is-checked');
-    const role = label?.querySelector('.req-executor-role');
-    if (role) role.hidden = true;
-  });
   if (hint) {
-    const n = checked.length;
+    const n = orderedNames.length;
     hint.textContent = n
-      ? `已选 ${n} 人 · 第一位为主执行`
-      : '请勾选执行人员 · 第一位为主执行';
+      ? `已选 ${n} 人 · 第一个点击的为主执行`
+      : '请勾选执行人员 · 第一个点击的为主执行';
     hint.classList.toggle('is-ok', n > 0);
     hint.classList.toggle('is-warn', n === 0);
   }
+}
+
+function getSelectedReassignExecutors() {
+  return getOrderedCheckedExecutors('reassignExecutors', reassignExecutorOrder);
+}
+
+function onReassignExecutorCheck(el) {
+  reassignExecutorOrder = trackExecutorOrder(reassignExecutorOrder, el);
+  refreshReassignExecutorUI();
+}
+
+function refreshReassignExecutorUI() {
+  const ordered = getSelectedReassignExecutors();
+  reassignExecutorOrder = ordered;
+  applyExecutorRoleUI('reassignExecutors', 'reassignExecutorHint', ordered);
 }
 
 async function reviewerReassign(id) {
@@ -3239,14 +3678,18 @@ async function createItem() {
 function showItemDetail(id) {
   const item = state.items.find(i => i.id === id);
   if (!item) return;
+  detailModalRef = { kind: 'edit', id };
   recordTaskCheckView(id);
   const updates = (item.progress_updates || []);
   const isAdmin = state.user?.role === 'admin';
-  const canEdit = isMyReviewTask(item) || (isReviewerUser() && !item.reviewer);
+  const canEdit = canLeadManageTask(item) || (isReviewerUser() && !item.reviewer);
+  const canContent = canEditTaskContent(item);
   const canProgress = item.assignee === state.user?.name || (item.assistants || []).includes(state.user?.name);
-  const checkMeta = isMyReviewTask(item)
+  const checkMeta = canLeadManageTask(item)
     ? ` ${checkCountBadgeHtml(item.check_count, { labeled: true })}`
     : '';
+  const deadlineVal = itemDeadlineValue(item);
+  const descEdit = descriptionWithoutDeadline(item.description || '');
   showModal(item.title, `
     <div style="margin-bottom:0.75rem">
       ${item.req_no ? `<span class="req-no-tag">${esc(item.req_no)}</span> ` : ''}
@@ -3258,9 +3701,17 @@ function showItemDetail(id) {
       ${myWorkRole(item) === 'assist' ? '<span class="type-badge type-task" style="margin-left:0.35rem">我的协助</span>' : ''}
     </div>
     <div style="font-size:0.85rem;margin-bottom:0.75rem;padding:0.5rem;background:var(--bg);border-radius:6px">${taskPeopleHtml(item)}</div>
-    <p style="color:var(--muted);margin-bottom:0.75rem">${esc(item.description || '无描述')}</p>
+    ${!canContent ? `<p style="color:var(--muted);margin-bottom:0.75rem">${esc(item.description || '无描述')}</p>` : ''}
     ${item.blocked_reason ? `<p style="color:var(--danger);font-size:0.85rem;margin-bottom:0.5rem">${BLOCKER_ICONS[item.blocker_type] || '🚧'} ${esc(item.blocked_reason)}</p>` : ''}
-    ${renderTaskProgressTimeline(updates)}
+    ${renderTaskProgressTimeline(updates, item)}
+    ${canContent ? `
+      <div class="section-title" style="font-size:0.85rem;margin-top:0.5rem">标题 / 描述 / 预期时间</div>
+      <div class="form-group"><label>标题</label><input id="eTitle" value="${esc(item.title || '')}"></div>
+      <div class="form-group"><label>任务描述</label><textarea id="eDesc" rows="4">${esc(descEdit)}</textarea></div>
+      <div class="form-group"><label>预期时间</label><input id="eDeadline" type="date" value="${esc(deadlineVal)}"></div>
+      <button class="btn btn-primary" style="width:100%;margin-bottom:0.75rem" onclick="saveItemContent('${id}')">💾 保存内容修改</button>
+      <p style="font-size:0.75rem;color:var(--muted);margin:-0.35rem 0 0.75rem">修改将留痕，并通知其他相关责任人（提出/审核/主执行/协助）</p>
+    ` : ''}
     <div class="section-title" style="font-size:0.85rem;margin-top:0.5rem">任务编辑</div>
     ${canEditTaskPriority(item) ? `<div class="form-group"><label>优先级</label>${priorityControlHtml(item, { editable: true })}</div>` : ''}
     <div class="form-group"><label>状态</label><select id="eStatus">${FLOW_COLS.map(c => `<option value="${c.id}" ${flowCategory(item) === c.id ? 'selected' : ''}>${c.label}</option>`).join('')}</select></div>
@@ -3269,6 +3720,7 @@ function showItemDetail(id) {
     ${item.status === 'blocked' ? `<div class="form-group"><label>阻塞原因</label><input id="eBlocked" value="${esc(item.blocked_reason || '')}"></div>` : ''}
     <div class="form-group"><label>验收标准</label><textarea id="eCriteria">${esc(item.acceptance_criteria || '')}</textarea></div>
     ${canProgress ? `<div class="section-title" style="font-size:0.85rem">提交进展</div>
+      <div class="form-group"><label>进展日期（留空=提交时的今日）</label><input id="modalProgDate" type="date"></div>
       <div class="form-group"><textarea id="modalProgDesc" rows="2" placeholder="今日进展..."></textarea></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
         <select id="modalBlockerType">${Object.entries(BLOCKER_TYPES).map(([k,v]) => `<option value="${k}">${v}</option>`).join('')}</select>
@@ -3276,27 +3728,29 @@ function showItemDetail(id) {
       </div>
       <button class="btn btn-ghost btn-sm" style="margin:0.5rem 0" onclick="submitProgress('${id}', true)">📤 提交进展</button>
       ${ACTIVE_STATUSES.includes(item.status) || item.status === 'blocked' ? `<button class="btn btn-success btn-sm" style="margin:0.5rem 0.5rem" onclick="completeTask('${id}')">✅ 任务完成</button>` : ''}` : ''}
-    ${canEdit ? `<button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="updateItem('${id}')">保存</button>` : ''}
-    ${isMyReviewTask(item) && flowCategory(item) === 'in_progress' ? `
+    ${canEdit ? `<button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="updateItem('${id}')">保存状态/负责人等</button>` : ''}
+    ${canLeadManageTask(item) && flowCategory(item) === 'in_progress' ? `
       <button class="btn btn-ghost" style="width:100%;margin-bottom:0.5rem;border-color:var(--danger);color:var(--danger)" onclick="reviewerTerminate('${id}')">⏹ 终止执行</button>
       <button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="showReassignModal('${id}')">🔄 二次分配</button>
     ` : ''}
-    ${isMyReviewTask(item) && item.status === 'blocked' ? `
+    ${canLeadManageTask(item) && item.status === 'blocked' ? `
       <button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="showReassignModal('${id}')">🔄 二次分配</button>
     ` : ''}
-    ${isMyReviewTask(item) && (item.status === 'done' || item.status === 'terminated') ? `
+    ${canLeadManageTask(item) && (item.status === 'done' || item.status === 'terminated') ? `
       <button class="btn btn-ghost" style="width:100%;margin-bottom:0.5rem;border-color:${STAR_GOLD};color:#6b5410" onclick="reviewerRevoke('${id}')">↩ 退回执行中</button>
     ` : ''}
     ${isAdmin ? `<button class="btn btn-danger" style="width:100%" onclick="deleteItem('${id}')">🗑️ 删除任务（超级管理员）</button>` : ''}
   `);
   if (!canEdit) {
     const body = document.getElementById('modalBody');
-    const note = document.createElement('div');
-    note.className = 'readonly-note';
-    note.textContent = '执行人员请在「今日工作台」提交进展并标记完成。无权直接改动任务状态，由审核人员统一管理。';
-    body.prepend(note);
-    ['eStatus', 'eAssignee', 'ePts', 'eBlocked', 'eCriteria'].forEach(id => {
-      const el = document.getElementById(id);
+    if (!canContent) {
+      const note = document.createElement('div');
+      note.className = 'readonly-note';
+      note.textContent = '执行人员请在「今日工作台」提交进展并标记完成。无权直接改动任务状态，由审核人员统一管理。';
+      body.prepend(note);
+    }
+    ['eStatus', 'eAssignee', 'ePts', 'eBlocked', 'eCriteria'].forEach(fid => {
+      const el = document.getElementById(fid);
       if (!el) return;
       el.disabled = true;
       el.readOnly = true;
@@ -3304,6 +3758,31 @@ function showItemDetail(id) {
     body.querySelectorAll('button').forEach(btn => {
       if ((btn.getAttribute('onclick') || '').includes('updateItem(')) btn.style.display = 'none';
     });
+  }
+}
+
+async function saveItemContent(id) {
+  const item = state.items.find(i => i.id === id);
+  if (!item) return toast('任务不存在', 'error');
+  if (!canEditTaskContent(item)) {
+    toast('无权修改该任务内容', 'error');
+    return;
+  }
+  const title = document.getElementById('eTitle')?.value?.trim() || '';
+  const description = document.getElementById('eDesc')?.value ?? '';
+  const deadline = document.getElementById('eDeadline')?.value || '';
+  if (!title) return toast('请输入标题', 'error');
+  try {
+    const res = await api(`/items/${id}/content`, {
+      method: 'PATCH',
+      body: { title, description, deadline },
+    });
+    if (res?.item) syncItemInState(res.item);
+    toast(res?.changes?.length ? `已保存：${res.changes.join('；')}` : '无变更');
+    closeModal();
+    await reloadViewAfterMutation();
+  } catch (e) {
+    toast(e.message || '保存失败', 'error');
   }
 }
 
@@ -3412,11 +3891,10 @@ async function sendDeepChat() {
 }
 
 function quickChat(q) {
-  const hasProposer = (state.user?.capabilities || []).includes('proposer');
-  navigate(hasProposer ? 'submit' : 'ai').then(() => {
+  navigate('robot').then(() => {
     setTimeout(() => {
-      const el = hasProposer ? document.getElementById('submitChatInput') : document.getElementById('chatInput');
-      if (el) { el.value = q; hasProposer ? sendSubmitChat() : sendChat(); }
+      fillRobotExample(q);
+      sendRobotChat();
     }, 300);
   });
 }
@@ -3442,7 +3920,7 @@ async function saveMeetingText() {
     const res = await api('/ai/meeting/save-text', { method: 'POST', body: { text } });
     state.currentMeetingId = res.doc.id;
     await loadMeetingRecords();
-    toast('会议记录已保存');
+    toast(`会议记录已保存：${res.doc.title || '未命名'}`);
     await navigateSubmitHub('meeting');
   } catch (e) { toast(e.message, 'error'); setMeetingStatus(''); }
 }
@@ -3459,13 +3937,49 @@ async function selectMeetingRecord(id) {
   if (rec) {
     const ta = document.getElementById('meetingText');
     if (ta) ta.value = rec.transcript || rec.document || '';
+    toast(`已选中：${rec.title || '会议记录'}`);
+  }
+}
+
+async function deleteMeetingRecord(id) {
+  const rec = (state.meetingRecords || []).find(r => r.id === id);
+  if (!rec) return toast('记录不存在', 'error');
+  if (!window.confirm(`确认删除会议记录「${rec.title || '未命名'}」？\n删除后不可恢复。`)) return;
+  try {
+    await api(`/ai/meeting/${id}`, { method: 'DELETE' });
+    if (state.currentMeetingId === id) {
+      state.currentMeetingId = null;
+      const ta = document.getElementById('meetingText');
+      if (ta) ta.value = '';
+    }
+    await loadMeetingRecords();
+    toast('已删除会议记录');
+    await navigateSubmitHub('meeting');
+  } catch (e) {
+    toast(e.message || '删除失败', 'error');
   }
 }
 
 async function parseMeetingToForm(switchToForm = false) {
-  if (!state.currentMeetingId) return toast('请先选择或保存会议记录', 'error');
-  toast('AI 正在拆解会议记录...');
-  setMeetingStatus('AI 拆解中，请稍候...');
+  const records = state.meetingRecords || [];
+  if (!records.length) return toast('请先保存或上传会议记录', 'error');
+  if (!state.currentMeetingId) {
+    toast('有多条记录时，请先点选要拆解的那一条会议记录', 'error');
+    return;
+  }
+  const selected = records.find(r => r.id === state.currentMeetingId);
+  if (!selected) {
+    state.currentMeetingId = null;
+    toast('请重新选择会议记录', 'error');
+    await navigateSubmitHub('meeting');
+    return;
+  }
+  if (records.length > 1) {
+    const ok = window.confirm(`将对以下会议记录进行 AI 拆解并填入表单：\n\n「${selected.title || '未命名'}」\n\n确认继续？`);
+    if (!ok) return;
+  }
+  toast(`AI 正在拆解「${selected.title || '会议记录'}」...`);
+  setMeetingStatus(`AI 拆解中：${selected.title || ''}，请稍候...`);
   try {
     const res = await api(`/ai/meeting/${state.currentMeetingId}/parse`, { method: 'POST' });
     const r = res.requirement;
@@ -3593,42 +4107,17 @@ async function submitRequirement() {
 }
 
 function getSelectedExecutors() {
-  const box = document.getElementById('reqExecutors');
-  if (!box) return [];
-  return Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map(el => el.value);
+  return getOrderedCheckedExecutors('reqExecutors', reqExecutorOrder);
 }
 
 function refreshExecutorSelectionUI() {
-  const box = document.getElementById('reqExecutors');
-  const hint = document.getElementById('reqExecutorHint');
-  const checked = box ? Array.from(box.querySelectorAll('input[type="checkbox"]:checked')) : [];
-  checked.forEach((el, idx) => {
-    const label = el.closest('.req-executor-option');
-    label?.classList.toggle('is-primary', idx === 0);
-    label?.classList.toggle('is-checked', true);
-    const role = label?.querySelector('.req-executor-role');
-    if (role) {
-      role.hidden = false;
-      role.textContent = idx === 0 ? '主执行' : `协助${idx}`;
-    }
-  });
-  box?.querySelectorAll('input[type="checkbox"]:not(:checked)').forEach(el => {
-    const label = el.closest('.req-executor-option');
-    label?.classList.remove('is-primary', 'is-checked');
-    const role = label?.querySelector('.req-executor-role');
-    if (role) role.hidden = true;
-  });
-  if (hint) {
-    const n = checked.length;
-    hint.textContent = n
-      ? `已选 ${n} 人 · 第一位为主执行`
-      : '请勾选执行人员 · 第一位为主执行';
-    hint.classList.toggle('is-ok', n > 0);
-    hint.classList.toggle('is-warn', n === 0);
-  }
+  const ordered = getSelectedExecutors();
+  reqExecutorOrder = ordered;
+  applyExecutorRoleUI('reqExecutors', 'reqExecutorHint', ordered);
 }
 
-function onExecutorCheck() {
+function onExecutorCheck(el) {
+  reqExecutorOrder = trackExecutorOrder(reqExecutorOrder, el);
   refreshExecutorSelectionUI();
 }
 
@@ -3752,10 +4241,13 @@ async function submitProgress(id, fromModal = false) {
   const blocker_desc = fromModal
     ? document.getElementById('modalBlockerDesc')?.value
     : document.getElementById(`prog-blocker-desc-${id}`)?.value;
+  const date = fromModal
+    ? document.getElementById('modalProgDate')?.value
+    : document.getElementById(`prog-date-${id}`)?.value;
   if (!description?.trim() && (!blocker_type || blocker_type === 'none')) {
     return toast('请填写进展描述或选择卡点类型', 'error');
   }
-  const result = await api(`/items/${id}/progress`, { method: 'POST', body: { description, blocker_type, blocker_desc } });
+  const result = await api(`/items/${id}/progress`, { method: 'POST', body: { description, blocker_type, blocker_desc, date } });
   if (result?.item) syncItemInState(result.item);
   if (result?.activity) prependActivityInState(result.activity);
   toast(blocker_type && blocker_type !== 'none' ? '进展已提交，任务已标记为阻塞' : '今日进展已提交');
@@ -3909,6 +4401,11 @@ async function initApp() {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && shouldLiveSyncView()) {
         refreshLiveView(true);
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.body.classList.contains('copilot-expanded')) {
+        toggleSubmitCopilotExpand(false);
       }
     });
   } catch { localStorage.clear(); location.href = '/login.html'; }

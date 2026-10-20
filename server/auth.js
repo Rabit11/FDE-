@@ -18,6 +18,7 @@ const NAV_ITEMS = {
   taskcenter: { id: 'taskcenter', label: '📋 任务中心', caps: ['reviewer'], roles: ['admin', 'manager'] },
   dashboard: { id: 'dashboard', label: '📊 概览', caps: ['reviewer'], roles: ['admin'] },
   demandai: { id: 'demandai', label: '📤 提交需求', caps: ['reviewer'], roles: ['admin', 'manager'] },
+  robot: { id: 'robot', label: '🤖 工作机器人', caps: [], roles: [] },
   mywork: { id: 'mywork', label: '💼 今日工作台', caps: ['executor'], roles: [] },
   submit: { id: 'submit', label: '📤 提交需求', caps: ['proposer'], roles: [] },
   profile: { id: 'profile', label: '👤 我的', caps: [], roles: [] },
@@ -25,7 +26,7 @@ const NAV_ITEMS = {
 };
 
 const SEED_USERS = [
-  { emp_id: '666666', name: 'admin', password: 'aiic@2026', role: 'admin', dept: '系统管理', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: true },
+  { emp_id: 'admin', name: 'admin', password: 'aiic@2026', role: 'admin', dept: '系统管理', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: true },
   { emp_id: '600412', name: '曾锐', password: '600412', role: 'manager', dept: '审核人', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
   { emp_id: '600764', name: '张弛', password: '600764', role: 'manager', dept: '审核人', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
   { emp_id: '600471', name: '林宇飞', password: '600471', role: 'manager', dept: '审核人', capabilities: ['reviewer', 'proposer', 'executor'], can_manage_users: false },
@@ -68,12 +69,14 @@ function getNavForUser(user) {
     if (user.role === 'admin') {
       nav.push({ id: 'team', label: '👥 团队管理' });
       nav.push({ id: 'dashboard', label: '📊 全局看板' });
+      nav.push({ id: 'robot', label: '🤖 工作机器人' });
       nav.push({ id: 'profile', label: '👤 我的' });
       nav.push({ id: 'taskcenter', label: '📋 任务中心' });
       nav.push({ id: 'submit', label: '📤 提交需求' });
       return nav;
     }
     nav.push({ id: 'dashboard', label: '📊 全局看板' });
+    nav.push({ id: 'robot', label: '🤖 工作机器人' });
     nav.push({ id: 'profile', label: '👤 我的' });
     nav.push({ id: 'taskcenter', label: '📋 任务中心' });
     nav.push({ id: 'submit', label: '📤 提交需求' });
@@ -82,6 +85,7 @@ function getNavForUser(user) {
 
   if (caps.includes('executor')) {
     nav.push({ id: 'mywork', label: '💼 今日工作台' });
+    nav.push({ id: 'robot', label: '🤖 工作机器人' });
     nav.push({ id: 'taskcenter', label: '📋 任务中心' });
     if (caps.includes('proposer')) nav.push({ id: 'submit', label: '📤 提交需求' });
     nav.push({ id: 'profile', label: '👤 我的记录' });
@@ -89,6 +93,7 @@ function getNavForUser(user) {
   }
 
   if (caps.includes('proposer')) nav.push({ id: 'submit', label: '📤 提交需求' });
+  nav.push({ id: 'robot', label: '🤖 工作机器人' });
   nav.push({ id: 'taskcenter', label: '📋 任务中心' });
   nav.push({ id: 'profile', label: '👤 我的' });
   return nav;
@@ -147,7 +152,7 @@ function getSessionUser(token, users) {
 function hasPermission(user, permission) {
   if (!user) return false;
   if (user.role === 'admin') return true;
-  const capMap = { review: 'reviewer', assign: 'reviewer', acceptance: 'reviewer', submit: 'proposer', execute: 'executor', ai: true, ai_copilot: true, metrics: 'reviewer', all: false };
+  const capMap = { review: 'reviewer', assign: 'reviewer', acceptance: 'reviewer', submit: 'proposer', execute: 'executor', ai: true, ai_copilot: true, robot: true, metrics: 'reviewer', all: false };
   if (permission === 'all') return user.role === 'admin';
   const need = capMap[permission];
   if (need === true) return true;

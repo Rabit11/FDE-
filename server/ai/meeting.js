@@ -4,6 +4,33 @@ const docparse = require('./docparse');
 const llm = require('./llm');
 const { normalizeTaskTitle } = require('../db');
 
+/** 从会议正文自动识别简短名称，并带上时间便于区分 */
+function inferMeetingTitle(text, { source = 'text', filename = '' } = {}) {
+  const raw = String(text || '').replace(/\r/g, '').trim();
+  const time = new Date().toLocaleString('zh-CN', {
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+  const labeled = raw.match(/(?:主题|议题|标题|会议名称|需求名称|项目名称|任务名称)[：:]\s*(.+)/);
+  let candidate = labeled ? labeled[1].trim() : '';
+  if (!candidate) {
+    const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+    const skip = /^(#{1,6}\s*)?(会议记录|来源|时间|转写内容|字数|章节|期望|验收|场景)/;
+    const hit = lines.find(l => !skip.test(l) && l.replace(/^[-*•\d.、）)\s#`]+/, '').length >= 4);
+    candidate = (hit || '').replace(/^[-*•\d.、）)\s#`]+/, '').replace(/[*_`]/g, '').trim();
+  }
+  candidate = candidate.replace(/\s+/g, ' ').slice(0, 36);
+  if (candidate.length >= 36) candidate = `${candidate.slice(0, 35)}…`;
+  if (!candidate) {
+    if (source === 'voice') return `语音会议 · ${time}`;
+    if (source === 'document') {
+      const base = String(filename || '').replace(/\.[^.]+$/, '').slice(0, 24);
+      return base ? `${base} · ${time}` : `文档会议 · ${time}`;
+    }
+    return `文字记录 · ${time}`;
+  }
+  return `${candidate} · ${time}`;
+}
+
 function saveMeetingRecord(queries, user, data) {
   const doc = {
     id: uuid(),
@@ -28,7 +55,7 @@ function saveMeetingRecord(queries, user, data) {
 async function transcribeAndSave(filePath, originalName, mimeType, user, queries) {
   const result = await asr.transcribeFile(filePath, originalName, mimeType);
   return saveMeetingRecord(queries, user, {
-    title: `语音会议 · ${originalName}`,
+    title: inferMeetingTitle(result.text, { source: 'voice', filename: originalName }),
     filename: originalName,
     source_type: 'voice',
     transcript: result.text,
@@ -41,7 +68,7 @@ async function transcribeAndSave(filePath, originalName, mimeType, user, queries
 async function parseDocumentAndSave(filePath, originalName, user, queries) {
   const parsed = await docparse.parseDocument(filePath, originalName);
   return saveMeetingRecord(queries, user, {
-    title: `文档会议 · ${originalName}`,
+    title: inferMeetingTitle(parsed.text, { source: 'document', filename: originalName }),
     filename: originalName,
     source_type: 'document',
     transcript: parsed.text,
@@ -52,8 +79,9 @@ async function parseDocumentAndSave(filePath, originalName, user, queries) {
 
 async function saveTextRecord(text, user, queries, title) {
   if (!text?.trim()) throw new Error('会议记录内容不能为空');
+  const autoTitle = title?.trim() || inferMeetingTitle(text, { source: 'text' });
   return saveMeetingRecord(queries, user, {
-    title: title || `文字记录 ${new Date().toLocaleString('zh-CN')}`,
+    title: autoTitle,
     source_type: 'text',
     transcript: text.trim(),
     document: `# 会议记录\n\n> 来源：手动输入\n> 时间：${new Date().toLocaleString('zh-CN')}\n\n${text.trim()}`,
@@ -94,4 +122,11 @@ async function parseToRequirement(docId, user, queries) {
   return { doc, requirement: parsed };
 }
 
-module.exports = { saveMeetingRecord, transcribeAndSave, parseDocumentAndSave, saveTextRecord, parseToRequirement };
+module.exports = {
+  saveMeetingRecord,
+  transcribeAndSave,
+  parseDocumentAndSave,
+  saveTextRecord,
+  parseToRequirement,
+  inferMeetingTitle,
+};
